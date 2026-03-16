@@ -2,8 +2,9 @@ using System.Collections.Generic;
 using System.Reflection;
 using System.Reflection.Emit;
 using HarmonyLib;
+using ScavShrapnelMod.Logic;
 
-namespace ScavShrapnelMod
+namespace ScavShrapnelMod.Patches
 {
     //  ПАТЧИ ВЗРЫВОВ — чистый Harmony, никакой бизнес-логики
 

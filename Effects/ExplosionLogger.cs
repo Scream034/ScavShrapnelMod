@@ -1,4 +1,5 @@
-namespace ScavShrapnelMod
+﻿using ScavShrapnelMod.Logic;
+namespace ScavShrapnelMod.Effects
 {
     /// <summary>
     /// Статическое хранилище последнего ExplosionParams.

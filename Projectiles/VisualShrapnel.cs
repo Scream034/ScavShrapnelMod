@@ -1,6 +1,7 @@
-using UnityEngine;
+﻿using UnityEngine;
+using ScavShrapnelMod.Logic;
 
-namespace ScavShrapnelMod
+namespace ScavShrapnelMod.Projectiles
 {
     /// <summary>
     /// Визуальный (fake) осколок без физики.

@@ -33,37 +33,49 @@
     <WarningLevel>4</WarningLevel>
   </PropertyGroup>
   <ItemGroup>
+    <!-- Root -->
+    <Compile Include="Plugin.cs" />
+    <Compile Include="ShrapnelConfig.cs" />
+    <Compile Include="Patches\ExplosionPatches.cs" />
+    <Compile Include="Properties\AssemblyInfo.cs" />
+    
+    <!-- Core -->
+    <Compile Include="Core\DebrisTracker.cs" />
+    <Compile Include="Core\ShrapnelVisuals.cs" />
+    <Compile Include="Core\ShrapnelFactory.cs" />
+    
+    <!-- Projectiles -->
+    <Compile Include="Projectiles\ShrapnelProjectile.cs" />
+    <Compile Include="Projectiles\VisualShrapnel.cs" />
+    <Compile Include="Projectiles\AshParticle.cs" />
+    
+    <!-- Effects -->
+    <Compile Include="Effects\ExplosionEffectsLogic.cs" />
+    <Compile Include="Effects\BulletImpactEffects.cs" />
+    <Compile Include="Effects\GroundDebrisLogic.cs" />
+    <Compile Include="Effects\ExplosionLogger.cs" />
+    
+    <!-- Logic -->
+    <Compile Include="Logic\ShrapnelSpawnLogic.cs" />
+    <Compile Include="Logic\BulletShrapnelLogic.cs" />
+    
+    <!-- Helpers -->
+    <Compile Include="Helpers\MathHelper.cs" />
+    <Compile Include="Helpers\ParticleHelper.cs" />
+    <Compile Include="Helpers\RandomExtensions.cs" />
     <Compile Include="Helpers\CustomResourceManager.cs" />
     <Compile Include="Helpers\FileManager.cs" />
     <Compile Include="Helpers\GameVersionChecker.cs" />
-    <Compile Include="Helpers\RandomExtensions.cs" />
-    <Compile Include="Helpers\MathHelper.cs" />
-    <Compile Include="Helpers\ParticleHelper.cs" />
-    <Compile Include="Properties\AssemblyInfo.cs" />
-    <Compile Include="Plugin.cs" />
-    <Compile Include="ConsoleCommands.cs" />
-    <Compile Include="ExplosionLogger.cs" />
-    <Compile Include="ExplosionPatches.cs" />
-    <Compile Include="AshParticle.cs" />
-    <Compile Include="ShrapnelFactory.cs" />
-    <Compile Include="ShrapnelProjectile.cs" />
-    <Compile Include="BulletShrapnelLogic.cs" />
-    <Compile Include="ShrapnelSpawnLogic.cs" />
-    <Compile Include="ShrapnelVisuals.cs" />
-    <Compile Include="BulletImpactEffects.cs" />
-    <Compile Include="ExplosionEffectsLogic.cs" />
-    <Compile Include="VisualShrapnel.cs" />
-    <Compile Include="GroundDebrisLogic.cs" />
-    <Compile Include="DebrisTracker.cs" />
-    <Compile Include="ShrapnelConfig.cs" />
+    
+    <!-- Console -->
+    <Compile Include="Console\ConsoleCommands.cs" />
   </ItemGroup>
   <ItemGroup>
     <Reference Include="0Harmony, Version=2.9.0.0, Culture=neutral, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
       <HintPath>Libraries\0Harmony.dll</HintPath>
     </Reference>
-    <Reference
-      Include="Assembly-CSharp, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
+    <Reference Include="Assembly-CSharp, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
       <HintPath>Libraries\Assembly-CSharp.dll</HintPath>
     </Reference>
@@ -77,8 +89,7 @@
     <Reference Include="NAudio.Core">
       <HintPath>Libraries\NAudio.Core.dll</HintPath>
     </Reference>
-    <Reference
-      Include="Unity.TextMeshPro, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
+    <Reference Include="Unity.TextMeshPro, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
       <HintPath>Libraries\Unity.TextMeshPro.dll</HintPath>
     </Reference>
@@ -86,13 +97,11 @@
       <SpecificVersion>False</SpecificVersion>
       <HintPath>Libraries\UnityEngine.dll</HintPath>
     </Reference>
-    <Reference
-      Include="UnityEngine.AudioModule, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
+    <Reference Include="UnityEngine.AudioModule, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
       <HintPath>Libraries\UnityEngine.AudioModule.dll</HintPath>
     </Reference>
-    <Reference
-      Include="UnityEngine.CoreModule, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
+    <Reference Include="UnityEngine.CoreModule, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
       <HintPath>Libraries\UnityEngine.CoreModule.dll</HintPath>
     </Reference>
@@ -105,8 +114,7 @@
     <Reference Include="UnityEngine.Physics2DModule">
       <HintPath>Libraries\UnityEngine.Physics2DModule.dll</HintPath>
     </Reference>
-    <Reference
-      Include="UnityEngine.TextRenderingModule, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
+    <Reference Include="UnityEngine.TextRenderingModule, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
       <HintPath>Libraries\UnityEngine.TextRenderingModule.dll</HintPath>
     </Reference>
@@ -122,6 +130,6 @@
       DestinationFolder="$(PluginsDir)"
       OverwriteReadOnlyFiles="true"
     />
-    <Message Text="✅ Скопировано в $(PluginsDir)" Importance="high" />
+    <Message Text="Copied to $(PluginsDir)" Importance="high" />
   </Target>
 </Project>

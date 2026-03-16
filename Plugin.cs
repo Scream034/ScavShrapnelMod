@@ -3,6 +3,9 @@ using System.Reflection;
 using BepInEx;
 using HarmonyLib;
 using UnityEngine;
+using ScavShrapnelMod.Console;
+using ScavShrapnelMod.Core;
+using ScavShrapnelMod.Logic;
 
 namespace ScavShrapnelMod
 {
@@ -86,8 +89,10 @@ namespace ScavShrapnelMod
         {
             try
             {
-                GameObject registrar = new GameObject("ShrapnelMod_Registrar");
-                registrar.hideFlags = HideFlags.HideAndDontSave;
+                GameObject registrar = new GameObject("ShrapnelMod_Registrar")
+                {
+                    hideFlags = HideFlags.HideAndDontSave
+                };
                 DontDestroyOnLoad(registrar);
                 registrar.AddComponent<ConsoleCommandRegistrar>();
             }

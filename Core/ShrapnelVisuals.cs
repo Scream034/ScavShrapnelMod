@@ -1,8 +1,9 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using UnityEngine;
+using ScavShrapnelMod.Projectiles;
 
-namespace ScavShrapnelMod
+namespace ScavShrapnelMod.Core
 {
     /// <summary>
     /// Static cache of sprites, materials, and colors for shrapnel.

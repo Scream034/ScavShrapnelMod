@@ -1,8 +1,11 @@
-using System;
+﻿using System;
 using UnityEngine;
 using ScavShrapnelMod.Helpers;
+using ScavShrapnelMod.Core;
+using ScavShrapnelMod.Logic;
+using ScavShrapnelMod.Projectiles;
 
-namespace ScavShrapnelMod
+namespace ScavShrapnelMod.Effects
 {
     /// <summary>
     /// Enhanced bullet impact effects for visceral gunfire feedback.

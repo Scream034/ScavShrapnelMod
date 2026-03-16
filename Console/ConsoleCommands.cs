@@ -1,7 +1,10 @@
-using System;
+﻿using System;
 using UnityEngine;
+using ScavShrapnelMod.Core;
+using ScavShrapnelMod.Logic;
+using ScavShrapnelMod.Projectiles;
 
-namespace ScavShrapnelMod
+namespace ScavShrapnelMod.Console
 {
     /// <summary>
     /// Console commands for mod testing.

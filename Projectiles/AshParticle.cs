@@ -1,6 +1,6 @@
-using UnityEngine;
+﻿using UnityEngine;
 
-namespace ScavShrapnelMod
+namespace ScavShrapnelMod.Projectiles
 {
     /// <summary>
     /// Realistic visual particle for ash, dust, debris, and steam.

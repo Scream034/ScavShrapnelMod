@@ -1,7 +1,9 @@
-using UnityEngine;
+﻿using UnityEngine;
 using ScavShrapnelMod.Helpers;
+using ScavShrapnelMod.Logic;
+using ScavShrapnelMod.Projectiles;
 
-namespace ScavShrapnelMod
+namespace ScavShrapnelMod.Core
 {
     /// <summary>
     /// Factory for shrapnel objects: physics projectiles, visuals, ash, and break fragments.

@@ -1,8 +1,9 @@
-using System;
+﻿using System;
 using UnityEngine;
 using ScavShrapnelMod.Helpers;
+using ScavShrapnelMod.Core;
 
-namespace ScavShrapnelMod
+namespace ScavShrapnelMod.Projectiles
 {
     /// <summary>
     /// Main shrapnel component. Finite State Machine: Flying -> Stuck/Debris.

@@ -1,8 +1,11 @@
-using System;
+﻿using System;
 using UnityEngine;
 using ScavShrapnelMod.Helpers;
+using ScavShrapnelMod.Core;
+using ScavShrapnelMod.Effects;
+using ScavShrapnelMod.Projectiles;
 
-namespace ScavShrapnelMod
+namespace ScavShrapnelMod.Logic
 {
     /// <summary>
     /// Shrapnel and effects from bullets hitting metal blocks.

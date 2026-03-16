@@ -1,4 +1,5 @@
-using BepInEx.Configuration;
+﻿using BepInEx.Configuration;
+using ScavShrapnelMod.Projectiles;
 
 namespace ScavShrapnelMod
 {

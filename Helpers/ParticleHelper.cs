@@ -1,4 +1,6 @@
-using UnityEngine;
+﻿using UnityEngine;
+using ScavShrapnelMod.Core;
+using ScavShrapnelMod.Projectiles;
 
 namespace ScavShrapnelMod.Helpers
 {

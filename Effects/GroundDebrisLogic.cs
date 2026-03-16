@@ -1,8 +1,9 @@
-using System;
+﻿using System;
 using UnityEngine;
 using ScavShrapnelMod.Helpers;
+using ScavShrapnelMod.Core;
 
-namespace ScavShrapnelMod
+namespace ScavShrapnelMod.Effects
 {
     /// <summary>
     /// Visual ground debris particles from explosion shockwave.

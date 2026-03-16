@@ -1,6 +1,7 @@
-using UnityEngine;
+﻿using UnityEngine;
+using ScavShrapnelMod.Projectiles;
 
-namespace ScavShrapnelMod
+namespace ScavShrapnelMod.Core
 {
     /// <summary>
     /// Dual tracker for debris objects: separates physical shrapnel from visual particles.

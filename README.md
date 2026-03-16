@@ -20,6 +20,20 @@ You can download the latest version of the game here:
 **Multiplayer Support:**  
 Fully compatible with the [Co-op Multiplayer Mod](https://github.com/Krokosha666/cas-unk-krokosha-multiplayer-coop) (version **2.1.2** and above). Shrapnel generation, physics, and visual effects are 100% synchronized between all players!
 
+### 🎥 Showcase
+
+**Multiplayer Synchronization**  
+*A friend steps on a mine, and the flying shrapnel hits you perfectly in sync!*  
+![Multiplayer Mine Explosion](showcase/scav_1.gif)
+
+**Biome Effects & Footwear Protection**  
+*A turret explodes in the desert kicking up sand. You take a hit, fall onto scattered debris, but your boots save your feet from cuts.*  
+![Desert Turret Explosion & Boots Protection](showcase/scav_2.gif)
+
+**Watch Your Step!**  
+*Stepping on that same debris barefoot instantly causes severe bleeding and triggers the injury minigame.*  
+![Barefoot Damage](showcase/scav_3.gif)
+
 ### Main Features
 *   **Physical Shrapnel:** Every explosion sends shards of metal, stone, or wood flying in all directions.
 *   **Atmospheric Aftermath:** Massive explosions now leave behind rising smoke columns, glowing embers that rain down, and lingering dust clouds around the crater.
@@ -48,7 +62,21 @@ Fully compatible with the [Co-op Multiplayer Mod](https://github.com/Krokosha666
 👉[https://orsonik.itch.io/scav-prototype](https://orsonik.itch.io/scav-prototype)
 
 **Поддержка мультиплеера:**  
-Мод полностью совместим с [Co-op Multiplayer Mod](https://github.com/Krokosha666/cas-unk-krokosha-multiplayer-coop) (начиная с версии **2.1.2**). Разлет, физика осколков и даже визуальные эффекты на 100% синхронизированы между всеми игроками!
+Мод полностью совместим с[Co-op Multiplayer Mod](https://github.com/Krokosha666/cas-unk-krokosha-multiplayer-coop) (начиная с версии **2.1.2**). Разлет, физика осколков и даже визуальные эффекты на 100% синхронизированы между всеми игроками!
+
+### 🎥 Демонстрация
+
+**Синхронизация в мультиплеере**  
+*Друг наступает на мину, и разлетающийся осколок честно прилетает прямо в вас!*  
+![Взрыв мины в мультиплеере](showcase/scav_1.gif)
+
+**Реакция биома и защита ботинок**  
+*Взрыв турели в пустыне поднимает песок. Осколок сбивает вас с ног прямо на мелкий мусор, но плотные ботинки полностью спасают ноги от порезов.*  
+![Взрыв турели и защита ботинок](showcase/scav_2.gif)
+
+**Смотрите под ноги!**  
+*Специально наступаем на те же осколки, но уже босиком — получаем глубокий порез, кровотечение и мини-игру с лечением.*  
+![Урон босиком](showcase/scav_3.gif)
 
 ### Основные возможности
 *   **Физические осколки:** Каждый взрыв создает разлетающиеся частицы металла, камня или дерева с честной физикой.

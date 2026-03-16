@@ -14,13 +14,18 @@ namespace ScavShrapnelMod
     /// - Debris на полу с красной обводкой
     /// - Осколки от пуль при попадании в металл
     /// - Влияние температуры на визуалы
+    /// 
+    /// Порядок инициализации:
+    /// 1. ShrapnelConfig.Bind — загрузка конфигурации из .cfg файла
+    /// 2. Harmony.PatchAll — применение патчей
+    /// 3. ConsoleCommandRegistrar — ожидание готовности консоли
     /// </summary>
     [BepInPlugin(Guid, Name, Version)]
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "com.user.scavshrapnelmod";
         public const string Name = "ScavShrapnelMod";
-        public const string Version = "0.5.2";
+        public const string Version = "0.5.3";
 
         internal static BepInEx.Logging.ManualLogSource Log;
         internal static bool CommandsRegistered;
@@ -35,17 +40,26 @@ namespace ScavShrapnelMod
             Logger.LogInfo("║     Realistic Explosion Fragments     ║");
             Logger.LogInfo("╚═══════════════════════════════════════╝");
 
+            // 1. Конфигурация — ДО всего остального,
+            //    чтобы все системы имели доступ к настройкам при инициализации.
+            ShrapnelConfig.Bind(Config);
+
             Helpers.CustomResourceManager.Logger = Logger;
 
+            // 2. Harmony-патчи
             _harmony = new Harmony(Guid);
             _harmony.PatchAll();
 
-            // Создаём отдельный GameObject для регистрации команд.
-            // ВАЖНО: нельзя использовать BepInEx_Manager (this.gameObject) —
-            // он уничтожается после Chainloader startup!
+            // 3. Регистрация консольных команд (отложенная)
             CreateCommandRegistrar();
         }
 
+        /// <summary>
+        /// Создаёт отдельный GameObject для регистрации команд.
+        /// 
+        /// ВАЖНО: нельзя использовать BepInEx_Manager (this.gameObject) —
+        /// он уничтожается после Chainloader startup!
+        /// </summary>
         private void CreateCommandRegistrar()
         {
             try
@@ -109,7 +123,6 @@ namespace ScavShrapnelMod
                 return;
             }
 
-            // Ждём пока игра зарегистрирует свои команды
             if (ConsoleScript.instance != null &&
                 ConsoleScript.Commands != null &&
                 ConsoleScript.Commands.Count > 0)

@@ -7,11 +7,14 @@ namespace ScavShrapnelMod
     /// Фабрика осколков: создаёт GameObject'ы для primary, visual, break-фрагментов и пепла.
     /// 
     /// Все методы принимают System.Random для детерминированности в мультиплеере.
-    /// Использует пулинг материалов и спрайтов через ShrapnelVisuals.
+    /// Использует пулинг материалов и спрайтов через <see cref="ShrapnelVisuals"/>.
+    /// 
+    /// Все созданные объекты регистрируются в <see cref="DebrisTracker"/>
+    /// для предотвращения неограниченного роста GameObject'ов.
     /// </summary>
     public static class ShrapnelFactory
     {
-        //  Физический материал (общий для всех осколков) 
+        // ── Физический материал (общий для всех осколков) ──
 
         private static PhysicsMaterial2D _physMat;
         private static PhysicsMaterial2D PhysMat =>
@@ -21,19 +24,18 @@ namespace ScavShrapnelMod
                 friction = 0.6f
             });
 
-        //  Кэш ресурсов ран 
+        // ── Кэш ресурсов ран ──
 
         private static bool _woundCached;
         private static Sprite _woundSprite;
         private static Sprite _woundPanel;
 
-        //  Throttle для DamageBlock 
+        // ── Throttle для DamageBlock ──
 
         private static int _dmgFrame;
         private static int _dmgCount;
-        private const int MaxDmgPerFrame = 5;
 
-        //  MaterialPropertyBlock (переиспользуется) 
+        // ── MaterialPropertyBlock (переиспользуется) ──
 
         private static MaterialPropertyBlock _mpb;
         internal static MaterialPropertyBlock MPB => _mpb ?? (_mpb = new MaterialPropertyBlock());
@@ -44,10 +46,11 @@ namespace ScavShrapnelMod
                 ? (_emissionId = Shader.PropertyToID("_EmissionColor"))
                 : _emissionId;
 
-        //  WOUND SPRITES
+        // ── WOUND SPRITES ──
 
         /// <summary>
         /// Загружает спрайты ран из ресурсов игры (однократно).
+        /// Результат кэшируется: повторные вызовы — no-op.
         /// </summary>
         internal static void EnsureWoundSprites()
         {
@@ -64,25 +67,27 @@ namespace ScavShrapnelMod
         internal static Sprite WoundSprite => _woundSprite;
         internal static Sprite WoundPanel => _woundPanel;
 
-        //  THROTTLE
+        // ── THROTTLE ──
 
         /// <summary>
         /// Ограничивает количество DamageBlock-вызовов за кадр.
         /// Предотвращает лаги при массовом попадании осколков в стены.
+        /// Лимит читается из <see cref="ShrapnelConfig.MaxDamagePerFrame"/>.
         /// </summary>
         internal static bool TryDamageSlot()
         {
             int f = Time.frameCount;
             if (f != _dmgFrame) { _dmgFrame = f; _dmgCount = 0; }
-            if (_dmgCount >= MaxDmgPerFrame) return false;
+            if (_dmgCount >= ShrapnelConfig.MaxDamagePerFrame.Value) return false;
             _dmgCount++;
             return true;
         }
 
-        //  PRIMARY SPAWN — реальный осколок с физикой и уроном
+        // ── PRIMARY SPAWN — реальный осколок с физикой и уроном ──
 
         /// <summary>
         /// Создаёт полноценный осколок с Rigidbody2D, коллайдером и ShrapnelProjectile.
+        /// Регистрирует объект в <see cref="DebrisTracker"/>.
         /// 
         /// Параметры:
         /// - epicenter: точка спавна (центр взрыва или позиция разрушенного блока)
@@ -105,7 +110,7 @@ namespace ScavShrapnelMod
 
             EnsureWoundSprites();
 
-            //  GameObject 
+            // GameObject
             GameObject obj = new GameObject($"Shr_{type}_{index}");
             obj.transform.position = epicenter + rng.InsideUnitCircle() * 0.3f;
             obj.layer = 0;
@@ -113,7 +118,7 @@ namespace ScavShrapnelMod
             float scale = ScaleForWeight(weight, rng);
             obj.transform.localScale = Vector3.one * scale;
 
-            //  SpriteRenderer 
+            // SpriteRenderer
             SpriteRenderer sr = obj.AddComponent<SpriteRenderer>();
             sr.sprite = sprite;
             sr.sortingOrder = 10;
@@ -122,7 +127,7 @@ namespace ScavShrapnelMod
             float heat = HeatForWeight(weight);
             sr.color = Color.Lerp(ShrapnelVisuals.GetColdColor(type), ShrapnelVisuals.GetHotColor(), heat);
 
-            // Emission (уменьшен на 35%: было heat * 2f)
+            // Emission — уменьшен на 35% от оригинала (было heat * 2f → heat * 1.3f)
             if (heat > 0.3f)
             {
                 MPB.Clear();
@@ -130,12 +135,11 @@ namespace ScavShrapnelMod
                 sr.SetPropertyBlock(MPB);
             }
 
-            //  Rigidbody2D 
+            // Rigidbody2D
             Rigidbody2D rb = obj.AddComponent<Rigidbody2D>();
             rb.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
             rb.sharedMaterial = PhysMat;
 
-            // ФИКС: Hot теперь падают нормально (gravityScale 0.3 вместо 0.05)
             switch (weight)
             {
                 case ShrapnelWeight.Hot:     rb.mass = 0.02f; rb.gravityScale = 0.3f;  break;
@@ -144,17 +148,17 @@ namespace ScavShrapnelMod
                 case ShrapnelWeight.Massive: rb.mass = 0.8f;  rb.gravityScale = 0.5f;  break;
             }
 
-            // ФИКС: Hot получает повышенный drag чтобы не "парить"
-            rb.drag = weight == ShrapnelWeight.Hot ? 0.4f 
+            // Hot получает повышенный drag чтобы не "парить" бесконечно
+            rb.drag = weight == ShrapnelWeight.Hot ? 0.4f
                     : (weight == ShrapnelWeight.Massive ? 0.1f : 0.2f);
 
-            //  Collider (с micro-delay для предотвращения self-collision) 
+            // Collider (с micro-delay для предотвращения self-collision в эпицентре)
             CircleCollider2D col = obj.AddComponent<CircleCollider2D>();
             col.radius = weight == ShrapnelWeight.Massive ? 0.5f : 0.3f;
             col.sharedMaterial = PhysMat;
             col.enabled = false; // Включится через ShrapnelProjectile._physicsDelay
 
-            //  ShrapnelProjectile 
+            // ShrapnelProjectile
             ShrapnelProjectile proj = obj.AddComponent<ShrapnelProjectile>();
             proj.Type = type;
             proj.Weight = weight;
@@ -162,15 +166,18 @@ namespace ScavShrapnelMod
             proj.CanBreak = weight != ShrapnelWeight.Hot;
             SetDamage(proj, type, weight, rng);
 
-            //  Запуск 
+            // Запуск
             LaunchFragment(rb, weight, baseSpeed, type, rng);
             TryAddTrail(obj, proj, weight, rng);
+
+            DebrisTracker.Register(obj);
         }
 
-        //  VISUAL SPAWN — fake-осколок без физики (только трансформ)
+        // ── VISUAL SPAWN — fake-осколок без физики (только трансформ) ──
 
         /// <summary>
         /// Создаёт визуальный осколок без Rigidbody/коллайдера.
+        /// Регистрирует объект в <see cref="DebrisTracker"/>.
         /// 
         /// Направление зависит от типа:
         /// - Metal (мина): конус 240° вверх (осколки не уходят в землю)
@@ -181,18 +188,21 @@ namespace ScavShrapnelMod
         public static void SpawnVisual(Vector2 epicenter, float baseSpeed,
             ShrapnelProjectile.ShrapnelType type, System.Random rng)
         {
+            Material litMat = ShrapnelVisuals.LitMaterial;
+            if (litMat == null) return;
+
             GameObject obj = new GameObject("VisualShr");
             obj.transform.position = epicenter + rng.InsideUnitCircle() * 0.2f;
 
             SpriteRenderer sr = obj.AddComponent<SpriteRenderer>();
             sr.sprite = ShrapnelVisuals.GetTriangleSprite(ShrapnelVisuals.TriangleShape.Needle);
-            sr.sharedMaterial = ShrapnelVisuals.LitMaterial;
+            sr.sharedMaterial = litMat;
             sr.sortingOrder = 9;
 
             Color hotCol = ShrapnelVisuals.GetHotColor();
             sr.color = hotCol;
 
-            // Emission (уменьшен)
+            // Emission — уменьшен
             MPB.Clear();
             MPB.SetColor(EmissionColorId, hotCol * rng.Range(1f, 2f));
             sr.SetPropertyBlock(MPB);
@@ -209,6 +219,8 @@ namespace ScavShrapnelMod
 
             var visual = obj.AddComponent<VisualShrapnel>();
             visual.Initialize(dir, speed, lifetime);
+
+            DebrisTracker.Register(obj);
         }
 
         /// <summary>
@@ -223,7 +235,6 @@ namespace ScavShrapnelMod
         {
             if (type == ShrapnelProjectile.ShrapnelType.Metal)
             {
-                // Конус 240° вверх: от -30° до 210°
                 float angleDeg = rng.Range(-30f, 210f);
                 float angleRad = angleDeg * Mathf.Deg2Rad;
                 return new Vector2(Mathf.Cos(angleRad), Mathf.Sin(angleRad));
@@ -232,10 +243,11 @@ namespace ScavShrapnelMod
             return rng.InsideUnitCircleNormalized();
         }
 
-        //  ASH CLOUD — облако пепла/углей после взрыва
+        // ── ASH CLOUD — облако пепла/углей после взрыва ──
 
         /// <summary>
         /// Спавнит облако пепла/тлеющих углей после взрыва.
+        /// Регистрирует каждую частицу в <see cref="DebrisTracker"/>.
         /// 
         /// Визуальный эффект без физики и урона.
         /// Частицы медленно оседают, покачиваются и затухают.
@@ -250,7 +262,6 @@ namespace ScavShrapnelMod
             Material unlitMat = ShrapnelVisuals.UnlitMaterial;
             if (unlitMat == null) return;
 
-            // Температурный модификатор
             float ambientTemp = 20f;
             try { ambientTemp = WorldGeneration.world.ambientTemperature; } catch { }
 
@@ -270,7 +281,6 @@ namespace ScavShrapnelMod
                 sr.sharedMaterial = unlitMat;
                 sr.sortingOrder = 8;
 
-                // Цвет зависит от температуры
                 Color ashColor = GetAshColor(isCold, isHot, rng);
 
                 Vector2 velocity = new Vector2(
@@ -282,24 +292,24 @@ namespace ScavShrapnelMod
 
                 AshParticle ash = obj.AddComponent<AshParticle>();
                 ash.Initialize(velocity, lifetime, ashColor, wobblePhase);
+
+                DebrisTracker.Register(obj);
             }
         }
 
         /// <summary>
-        /// Определяет цвет частицы пепла в зависимости от температуры.
+        /// Определяет цвет частицы пепла в зависимости от температуры окружающей среды.
         /// </summary>
         private static Color GetAshColor(bool isCold, bool isHot, System.Random rng)
         {
             if (isCold && rng.NextFloat() < 0.4f)
             {
-                // Холод → светлый пар/дым
                 float gray = rng.Range(0.7f, 0.9f);
                 return new Color(gray, gray, gray, 0.6f);
             }
-            
+
             if (isHot || rng.NextFloat() < 0.3f)
             {
-                // Жарко или шанс → тлеющий уголёк
                 return new Color(
                     rng.Range(0.8f, 1f),
                     rng.Range(0.2f, 0.4f),
@@ -307,22 +317,22 @@ namespace ScavShrapnelMod
                     0.7f);
             }
 
-            // Обычный тёмный пепел
             float g = rng.Range(0.15f, 0.35f);
             return new Color(g, g, g, 0.5f);
         }
 
-        //  BREAK FRAGMENTS — осколки от разрушения осколка
+        // ── BREAK FRAGMENTS — осколки от разрушения осколка ──
 
         /// <summary>
         /// Спавнит дочерние фрагменты при разрушении тяжёлого осколка.
-        /// При отсутствии rng — создаёт локальный детерминированный.
+        /// Регистрирует каждый фрагмент в <see cref="DebrisTracker"/>.
+        /// 
+        /// При отсутствии rng — создаёт детерминированный из координат и скорости удара.
         /// </summary>
         internal static void SpawnBreakFragments(Vector2 position, Vector2 impactNormal,
             float parentScale, ShrapnelProjectile.ShrapnelType type,
             ShrapnelWeight parentWeight, float impactSpeed, System.Random rng = null)
         {
-            // Детерминированный fallback для вызовов из OnCollision
             if (rng == null)
             {
                 int seed = unchecked(
@@ -395,13 +405,15 @@ namespace ScavShrapnelMod
 
                 rb.AddForce(dir * childSpeed * rb.mass * 5f, ForceMode2D.Impulse);
                 rb.AddTorque(rng.Range(-300f, 300f));
+
+                DebrisTracker.Register(obj);
             }
         }
 
-        //  UTILITIES
+        // ── UTILITIES ──
 
         /// <summary>
-        /// Масштаб спрайта по весу. Massive крупнее — видны на полу.
+        /// Масштаб спрайта по весовой категории. Massive крупнее — видны на полу.
         /// </summary>
         internal static float ScaleForWeight(ShrapnelWeight w, System.Random rng)
         {
@@ -416,7 +428,7 @@ namespace ScavShrapnelMod
         }
 
         /// <summary>
-        /// Начальный нагрев: Hot = раскалённый, Massive = почти холодный.
+        /// Начальный нагрев: Hot = раскалённый (1.0), Massive = почти холодный (0.08).
         /// </summary>
         internal static float HeatForWeight(ShrapnelWeight w)
         {
@@ -431,7 +443,8 @@ namespace ScavShrapnelMod
         }
 
         /// <summary>
-        /// Устанавливает урон и кровотечение. Детерминированно.
+        /// Устанавливает урон и кровотечение на ShrapnelProjectile. Детерминированно.
+        /// HeavyMetal получает ×1.3 множитель урона.
         /// </summary>
         internal static void SetDamage(ShrapnelProjectile proj,
             ShrapnelProjectile.ShrapnelType type, ShrapnelWeight weight, System.Random rng)
@@ -461,7 +474,8 @@ namespace ScavShrapnelMod
         }
 
         /// <summary>
-        /// Запускает осколок. Мина = 240° вверх, остальные = 360°.
+        /// Запускает осколок в зависимости от типа и веса.
+        /// Мина = 240° вверх, остальные = 360°.
         /// Результирующая скорость клампится к GlobalMaxSpeed.
         /// </summary>
         internal static void LaunchFragment(Rigidbody2D rb, ShrapnelWeight weight,
@@ -469,7 +483,6 @@ namespace ScavShrapnelMod
         {
             Vector2 dir = GetDirectionForType(type, rng);
 
-            // ФИКС: Hot speedMult снижен (было 1.2-1.8)
             float speedMult;
             switch (weight)
             {
@@ -487,6 +500,9 @@ namespace ScavShrapnelMod
 
         /// <summary>
         /// Добавляет TrailRenderer горячим/тяжёлым осколкам.
+        /// 
+        /// Условия: Hot (всегда), Massive (всегда), Medium (25% шанс).
+        /// Heavy никогда не получает trail.
         /// </summary>
         internal static void TryAddTrail(GameObject obj, ShrapnelProjectile proj,
             ShrapnelWeight weight, System.Random rng)

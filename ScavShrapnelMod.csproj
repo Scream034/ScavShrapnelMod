@@ -33,23 +33,25 @@
     <WarningLevel>4</WarningLevel>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="AshParticle.cs" />
-    <Compile Include="BulletShrapnelLogic.cs" />
-    <Compile Include="ConsoleCommands.cs" />
-    <Compile Include="ExplosionLogger.cs" />
-    <Compile Include="ExplosionPatches.cs" />
     <Compile Include="Helpers\CustomResourceManager.cs" />
     <Compile Include="Helpers\FileManager.cs" />
     <Compile Include="Helpers\GameVersionChecker.cs" />
     <Compile Include="Helpers\RandomExtensions.cs" />
-    <Compile Include="Plugin.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="Plugin.cs" />
+    <Compile Include="ConsoleCommands.cs" />
+    <Compile Include="ExplosionLogger.cs" />
+    <Compile Include="ExplosionPatches.cs" />
+    <Compile Include="AshParticle.cs" />
     <Compile Include="ShrapnelFactory.cs" />
     <Compile Include="ShrapnelProjectile.cs" />
+    <Compile Include="BulletShrapnelLogic.cs" />
     <Compile Include="ShrapnelSpawnLogic.cs" />
     <Compile Include="ShrapnelVisuals.cs" />
     <Compile Include="VisualShrapnel.cs" />
     <Compile Include="GroundDebrisLogic.cs" />
+    <Compile Include="DebrisTracker.cs" />
+    <Compile Include="ShrapnelConfig.cs" />
   </ItemGroup>
   <ItemGroup>
     <Reference Include="0Harmony, Version=2.9.0.0, Culture=neutral, processorArchitecture=MSIL">

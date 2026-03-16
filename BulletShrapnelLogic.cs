@@ -7,51 +7,27 @@ namespace ScavShrapnelMod
     /// <summary>
     /// Осколки от пуль при попадании в металлический блок.
     /// 
+    /// Все числовые параметры читаются из <see cref="ShrapnelConfig"/> (секция Bullets).
+    /// 
     /// Механика:
     /// 1. Пуля попадает в блок (TurretScript.Shoot → Postfix)
-    /// 2. Делаем raycast по направлению выстрела
+    /// 2. Raycast по направлению выстрела
     /// 3. Если попали в металлический блок → 1-3 мелких осколка
     /// 4. Осколки летят от точки попадания + рандомный разброс
     /// 
     /// Ограничения производительности:
-    /// - Макс 1 спавн за MinFramesBetweenSpawns кадров
-    /// - Макс 3 осколка за спавн
+    /// - Throttle по кадрам (конфигурируемый)
+    /// - Макс осколков за спавн (конфигурируемый)
     /// - Только metallic блоки
-    /// - Raycast макс RaycastDistance единиц
+    /// - Raycast макс 200 единиц
     /// </summary>
     public static class BulletShrapnelLogic
     {
-        //  Константы 
-
         /// <summary>Дистанция raycast. Совпадает с TurretScript.Shoot (200f).</summary>
         private const float RaycastDistance = 200f;
 
         /// <summary>Имя слоя Ground в Unity.</summary>
         private const string GroundLayerName = "Ground";
-
-        /// <summary>Минимальный интервал между спавнами (кадры).</summary>
-        private const int MinFramesBetweenSpawns = 3;
-
-        /// <summary>Базовая скорость осколков от пуль (м/с).</summary>
-        private const float BaseSpeed = 25;
-
-        /// <summary>Количество осколков: min inclusive.</summary>
-        private const int MinFragments = 1;
-
-        /// <summary>Количество осколков: max exclusive.</summary>
-        private const int MaxFragmentsExclusive = 4;
-
-        /// <summary>Искры: min inclusive.</summary>
-        private const int MinSparks = 4;
-
-        /// <summary>Искры: max exclusive.</summary>
-        private const int MaxSparksExclusive = 8;
-
-        /// <summary>Множитель масштаба (мельче чем от взрыва).</summary>
-        private const float ScaleMultiplier = 0.72f;
-
-        /// <summary>Множитель нагрева (менее горячие).</summary>
-        private const float HeatMultiplier = 0.5f;
 
         /// <summary>Шанс что осколок Hot vs Medium.</summary>
         private const float HotWeightChance = 0.6f;
@@ -72,23 +48,22 @@ namespace ScavShrapnelMod
 
         /// <summary>
         /// Точка входа. Вызывается из Postfix патча TurretScript.Shoot.
+        /// Параметры читаются из конфига.
         /// </summary>
         public static void TrySpawnFromBullet(FireInfo info)
         {
             try
             {
-                // Throttle
                 int frame = Time.frameCount;
-                if (frame - _lastSpawnFrame < MinFramesBetweenSpawns) return;
+                if (frame - _lastSpawnFrame < ShrapnelConfig.BulletMinFramesBetweenSpawns.Value)
+                    return;
 
                 Vector2 origin = info.pos;
                 Vector2 direction = info.dir;
 
-                // Raycast по Ground
                 RaycastHit2D hit = Physics2D.Raycast(origin, direction, RaycastDistance, GroundMask);
                 if (!hit.collider) return;
 
-                // Проверка металлического блока
                 Vector2 blockSamplePos = hit.point + direction * 0.1f;
                 Vector2Int blockPos;
                 try
@@ -105,18 +80,22 @@ namespace ScavShrapnelMod
 
                 _lastSpawnFrame = frame;
 
-                // Детерминированный RNG
                 int seed = unchecked(
                     (int)(hit.point.x * 10000f) * 397 ^
                     (int)(hit.point.y * 10000f) ^
                     frame);
                 System.Random rng = new System.Random(seed);
 
-                int fragmentCount = rng.Range(MinFragments, MaxFragmentsExclusive);
+                int fragmentCount = rng.Range(
+                    ShrapnelConfig.BulletFragmentsMin.Value,
+                    ShrapnelConfig.BulletFragmentsMax.Value);
+
+                // Применяем глобальный множитель количества
+                fragmentCount = Mathf.Max(1,
+                    Mathf.RoundToInt(fragmentCount * ShrapnelConfig.SpawnCountMultiplier.Value));
+
                 for (int i = 0; i < fragmentCount; i++)
-                {
                     SpawnBulletFragment(hit.point, hit.normal, rng, i);
-                }
 
                 SpawnBulletSparks(hit.point, hit.normal, rng);
             }
@@ -128,12 +107,18 @@ namespace ScavShrapnelMod
 
         /// <summary>
         /// Спавнит один мелкий осколок от попадания пули.
+        /// Регистрирует в <see cref="DebrisTracker"/>.
         /// </summary>
         private static void SpawnBulletFragment(Vector2 hitPoint, Vector2 hitNormal,
             System.Random rng, int index)
         {
             Material litMat = ShrapnelVisuals.LitMaterial;
             if (litMat == null) return;
+
+            float scaleMultiplier = ShrapnelConfig.BulletScaleMultiplier.Value;
+            float heatMultiplier = ShrapnelConfig.BulletHeatMultiplier.Value;
+            float baseSpeed = ShrapnelConfig.BulletBaseSpeed.Value;
+            float globalMaxSpeed = ShrapnelConfig.GlobalMaxSpeed.Value;
 
             ShrapnelWeight weight = rng.NextFloat() < HotWeightChance
                 ? ShrapnelWeight.Hot
@@ -149,7 +134,7 @@ namespace ScavShrapnelMod
             obj.transform.position = hitPoint + rng.InsideUnitCircle() * 0.1f;
             obj.layer = 0;
 
-            float scale = ShrapnelFactory.ScaleForWeight(weight, rng) * ScaleMultiplier;
+            float scale = ShrapnelFactory.ScaleForWeight(weight, rng) * scaleMultiplier;
             obj.transform.localScale = Vector3.one * scale;
 
             SpriteRenderer sr = obj.AddComponent<SpriteRenderer>();
@@ -157,7 +142,7 @@ namespace ScavShrapnelMod
             sr.sortingOrder = 10;
             sr.sharedMaterial = litMat;
 
-            float heat = ShrapnelFactory.HeatForWeight(weight) * HeatMultiplier;
+            float heat = ShrapnelFactory.HeatForWeight(weight) * heatMultiplier;
             sr.color = Color.Lerp(
                 ShrapnelVisuals.GetColdColor(ShrapnelProjectile.ShrapnelType.Metal),
                 ShrapnelVisuals.GetHotColor(), heat);
@@ -185,19 +170,24 @@ namespace ScavShrapnelMod
             dir.Normalize();
 
             float speed = Mathf.Min(
-                BaseSpeed * rng.Range(0.5f, 1.5f),
-                ShrapnelSpawnLogic.GlobalMaxSpeed);
+                baseSpeed * rng.Range(0.5f, 1.5f),
+                globalMaxSpeed);
 
             rb.AddForce(dir * speed * rb.mass, ForceMode2D.Impulse);
             rb.AddTorque(rng.Range(-200f, 200f));
+
+            DebrisTracker.Register(obj);
         }
 
         /// <summary>
         /// Спавнит визуальные искры при попадании пули в металл.
+        /// Количество берётся из конфига.
         /// </summary>
         private static void SpawnBulletSparks(Vector2 hitPoint, Vector2 hitNormal, System.Random rng)
         {
-            int sparkCount = rng.Range(MinSparks, MaxSparksExclusive);
+            int sparkCount = rng.Range(
+                ShrapnelConfig.BulletSparksMin.Value,
+                ShrapnelConfig.BulletSparksMax.Value);
 
             for (int i = 0; i < sparkCount; i++)
             {

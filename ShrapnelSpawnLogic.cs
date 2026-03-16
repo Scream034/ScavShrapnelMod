@@ -6,20 +6,22 @@ namespace ScavShrapnelMod
 {
     /// <summary>
     /// Единственная точка входа для спавна осколков при взрывах.
-    /// Полностью детерминированно: System.Random с координатным сидом + версия мода.
+    /// 
+    /// Параметры классификации, скорости и количества читаются из
+    /// <see cref="ShrapnelConfig"/>.
+    /// 
+    /// Детерминированность: System.Random с координатным сидом + версия мода.
     /// </summary>
     public static class ShrapnelSpawnLogic
     {
         private static Vector2 _lastSpawnPos;
         private static int _lastSpawnFrame;
 
-        /// <summary>Максимальная скорость любого осколка (м/с).</summary>
-        public const float GlobalMaxSpeed = 128f;
-
-        private const float MinDistanceBetweenSpawns = 1.5f;
-
-        /// <summary>Множитель скорости для всех осколков.</summary>
-        private const float GlobalSpeedBoost = 1.5f;
+        /// <summary>
+        /// Максимальная скорость осколка. Читается из конфига.
+        /// Свойство для обратной совместимости (используется в ShrapnelFactory, VisualShrapnel).
+        /// </summary>
+        public static float GlobalMaxSpeed => ShrapnelConfig.GlobalMaxSpeed.Value;
 
         /// <summary>
         /// Генерирует детерминированный seed из позиции взрыва и версии мода.
@@ -28,20 +30,22 @@ namespace ScavShrapnelMod
         /// </summary>
         private static int MakeSeed(Vector2 position)
         {
-            // Хеш версии: "0.5.2" → стабильное число
             int versionHash = Plugin.Version.GetHashCode();
-
             return unchecked(
                 (int)(position.x * 1000f) * 397 ^
                 (int)(position.y * 1000f) ^
                 versionHash);
         }
 
+        /// <summary>
+        /// Throttle: не более одного спавна в кадре на позицию.
+        /// Дистанция берётся из конфига.
+        /// </summary>
         private static bool TryRegisterSpawn(Vector2 pos)
         {
             int frame = Time.frameCount;
             if (frame == _lastSpawnFrame &&
-                Vector2.Distance(pos, _lastSpawnPos) < MinDistanceBetweenSpawns)
+                Vector2.Distance(pos, _lastSpawnPos) < ShrapnelConfig.MinDistanceBetweenSpawns.Value)
                 return false;
 
             _lastSpawnPos = pos;
@@ -49,7 +53,7 @@ namespace ScavShrapnelMod
             return true;
         }
 
-        /// <summary>Обёртка для Transpiler.</summary>
+        /// <summary>Обёртка для Transpiler. Спавн + оригинальный вызов.</summary>
         public static void CustomCreateExplosion(ExplosionParams param)
         {
             TrySpawnFromExplosion(param);
@@ -59,6 +63,7 @@ namespace ScavShrapnelMod
         /// <summary>
         /// Главная точка спавна.
         /// primary → secondary → visual → ash → ground debris.
+        /// Все объекты регистрируются в <see cref="DebrisTracker"/>.
         /// </summary>
         public static void TrySpawnFromExplosion(ExplosionParams param)
         {
@@ -71,36 +76,42 @@ namespace ScavShrapnelMod
                 int seed = MakeSeed(param.position);
                 System.Random rng = new System.Random(seed);
 
+                float spawnMult = ShrapnelConfig.SpawnCountMultiplier.Value;
+
                 ClassifyExplosion(param, rng, out var type, out int count,
                     out float speed, out int visualCount);
 
-                // Температурный модификатор
+                // Применяем глобальный множитель
+                count = Mathf.Max(1, Mathf.RoundToInt(count * spawnMult));
+                visualCount = Mathf.Max(1, Mathf.RoundToInt(visualCount * spawnMult));
+
+                // Температурный модификатор для визуальных
                 float ambientTemp = GetAmbientTemperature();
                 if (ambientTemp < 5f)
                     visualCount = (int)(visualCount * 0.7f);
                 else if (ambientTemp > 25f)
                     visualCount = (int)(visualCount * 1.3f);
 
-                //  Secondary 
                 int secondarySpawned = SpawnSecondaryFromBlocks(param, rng, type, speed);
 
-                //  Primary 
                 for (int i = 0; i < count; i++)
                     SpawnSingle(param.position, type, speed, rng, i, count);
 
-                //  Visual (+50% от классификации) 
                 for (int i = 0; i < visualCount; i++)
                     ShrapnelFactory.SpawnVisual(param.position, speed, type, rng);
 
-                //  Ash 
-                int ashCount = GetAshCount(type, rng);
+                int ashCount = Mathf.Max(1, Mathf.RoundToInt(GetAshCount(type, rng) * spawnMult));
                 ShrapnelFactory.SpawnAshCloud(param.position, ashCount, type, rng);
 
-                //  Ground Debris 
                 GroundDebrisLogic.SpawnFromExplosion(param.position, param.range, rng);
 
-                Debug.Log($"[ShrapnelMod] V:{visualCount} P:{count} S:{secondarySpawned} A:{ashCount}" +
-                          $" at {param.position} (Seed:{seed} Temp:{ambientTemp:F0})");
+                // Conditional logging — только если включено в конфиге
+                if (ShrapnelConfig.DebugLogging.Value)
+                {
+                    Debug.Log($"[ShrapnelMod] V:{visualCount} P:{count} S:{secondarySpawned} A:{ashCount}" +
+                              $" at {param.position} (Seed:{seed} Temp:{ambientTemp:F0}" +
+                              $" Debris:{DebrisTracker.Count})");
+                }
             }
             catch (Exception e)
             {
@@ -114,7 +125,7 @@ namespace ScavShrapnelMod
             catch { return 20f; }
         }
 
-        /// <summary>Пепел: +20%.</summary>
+        /// <summary>Количество пепла по типу. Базовые значения до множителя.</summary>
         private static int GetAshCount(ShrapnelProjectile.ShrapnelType type, System.Random rng)
         {
             switch (type)
@@ -146,9 +157,12 @@ namespace ScavShrapnelMod
                     BlockInfo info = WorldGeneration.world.GetBlockInfo(blockId);
                     if (info == null) continue;
 
+                    string blockName = info.name ?? string.Empty;
+
                     var secType = info.metallic
                         ? ShrapnelProjectile.ShrapnelType.HeavyMetal
-                        : (info.health < 100f && !info.name.ToLower().Contains("stone")
+                        : (info.health < 100f &&
+                           blockName.IndexOf("stone", System.StringComparison.OrdinalIgnoreCase) < 0
                             ? ShrapnelProjectile.ShrapnelType.Wood
                             : ShrapnelProjectile.ShrapnelType.Stone);
 
@@ -173,43 +187,53 @@ namespace ScavShrapnelMod
         }
 
         /// <summary>
-        /// Классификация взрыва.
+        /// Классификация взрыва по параметрам.
         /// 
-        /// v0.5.2:
-        /// - Все visual +50%
-        /// - Мина: 25–37 primary, 75–121 visual
-        /// - Динамит: 150–226 visual (МАКСИМУМ мусора)
-        /// - Турель: 45–76 visual
+        /// Все пороговые значения (range, structuralDamage, velocity)
+        /// и выходные параметры (count, speed, visualCount) читаются из
+        /// <see cref="ShrapnelConfig"/>.
+        /// 
+        /// Если параметры взрыва не совпадают ни с динамитом, ни с турелью —
+        /// используется fallback "мина".
         /// </summary>
         private static void ClassifyExplosion(ExplosionParams p, System.Random rng,
             out ShrapnelProjectile.ShrapnelType type, out int count,
             out float speed, out int visualCount)
         {
-            const float eps = 0.5f;
+            float eps = ShrapnelConfig.ClassifyEpsilon.Value;
+            float speedBoost = ShrapnelConfig.GlobalSpeedBoost.Value;
 
             // Динамит
-            if (Mathf.Abs(p.range - 18f) < eps && Mathf.Abs(p.structuralDamage - 2000f) < eps)
+            if (Mathf.Abs(p.range - ShrapnelConfig.DynamiteRange.Value) < eps &&
+                Mathf.Abs(p.structuralDamage - ShrapnelConfig.DynamiteStructuralDamage.Value) < eps)
             {
                 type = ShrapnelProjectile.ShrapnelType.Stone;
-                count = rng.Range(12, 21);
-                speed = 35f * GlobalSpeedBoost;
-                visualCount = rng.Range(150, 226); // +50%
+                count = rng.Range(ShrapnelConfig.DynamitePrimaryMin.Value,
+                                  ShrapnelConfig.DynamitePrimaryMax.Value);
+                speed = ShrapnelConfig.DynamiteSpeed.Value * speedBoost;
+                visualCount = rng.Range(ShrapnelConfig.DynamiteVisualMin.Value,
+                                        ShrapnelConfig.DynamiteVisualMax.Value);
             }
             // Турель
-            else if (Mathf.Abs(p.range - 9f) < eps && Mathf.Abs(p.velocity - 15f) < eps)
+            else if (Mathf.Abs(p.range - ShrapnelConfig.TurretRange.Value) < eps &&
+                     Mathf.Abs(p.velocity - ShrapnelConfig.TurretVelocity.Value) < eps)
             {
                 type = ShrapnelProjectile.ShrapnelType.HeavyMetal;
-                count = rng.Range(6, 13);
-                speed = 40f * GlobalSpeedBoost;
-                visualCount = rng.Range(45, 76); // +50%
+                count = rng.Range(ShrapnelConfig.TurretPrimaryMin.Value,
+                                  ShrapnelConfig.TurretPrimaryMax.Value);
+                speed = ShrapnelConfig.TurretSpeed.Value * speedBoost;
+                visualCount = rng.Range(ShrapnelConfig.TurretVisualMin.Value,
+                                        ShrapnelConfig.TurretVisualMax.Value);
             }
-            // Мина
+            // Мина (fallback)
             else
             {
                 type = ShrapnelProjectile.ShrapnelType.Metal;
-                count = rng.Range(25, 37);
-                speed = 45f * GlobalSpeedBoost;
-                visualCount = rng.Range(75, 121); // +50%
+                count = rng.Range(ShrapnelConfig.MinePrimaryMin.Value,
+                                  ShrapnelConfig.MinePrimaryMax.Value);
+                speed = ShrapnelConfig.MineSpeed.Value * speedBoost;
+                visualCount = rng.Range(ShrapnelConfig.MineVisualMin.Value,
+                                        ShrapnelConfig.MineVisualMax.Value);
             }
         }
 

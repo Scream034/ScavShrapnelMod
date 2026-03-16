@@ -6,56 +6,64 @@ namespace ScavShrapnelMod
 {
     /// <summary>
     /// Визуальные частицы грунта от ударной волны.
+    /// 
+    /// Спавнит три типа частиц с разной физикой:
+    /// - Chunks (комки): крупные, летят низко и в стороны
+    /// - Dust (пыль): мелкая, почти парит в воздухе
+    /// - Streaks (полосы): быстрые "выстрелы" грязи от эпицентра
+    /// 
+    /// Все объекты регистрируются в <see cref="DebrisTracker"/>
+    /// для предотвращения неограниченного роста.
     /// </summary>
     public static class GroundDebrisLogic
     {
-        //  SCAN
+        // ── SCAN ──
 
-        /// <summary>Множитель радиуса сканирования.</summary>
+        /// <summary>Множитель радиуса сканирования относительно range взрыва.</summary>
         private const float RangeMultiplier = 2.0f;
 
-        /// <summary>Шаг по X. Каждый блок = максимум частиц.</summary>
+        /// <summary>Шаг по X при сканировании блоков.</summary>
         private const int ScanStepX = 1;
 
-        /// <summary>Блоков вниз от эпицентра.</summary>
+        /// <summary>Блоков вниз от эпицентра для поиска поверхности.</summary>
         private const int ScanDownMax = 15;
 
-        /// <summary>Блоков вверх от эпицентра.</summary>
+        /// <summary>Блоков вверх от эпицентра для поиска поверхности.</summary>
         private const int ScanUpMax = 5;
 
-        //  CHUNKS — крупные комки, НИЗКО летящие
+        // ── CHUNKS — крупные комки, НИЗКО летящие ──
 
-        /// <summary>Комков на каждую поверхность.</summary>
+        /// <summary>Комков на каждую найденную поверхность.</summary>
         private const int ChunksPerSurface = 6;
 
         private const float ChunkScaleMin = 0.12f;
         private const float ChunkScaleMax = 0.26f;
 
-        /// <summary>Скорость ВВЕРХ: низкая! Прижаты к земле.</summary>
+        /// <summary>Скорость ВВЕРХ: низкая — прижаты к земле.</summary>
         private const float ChunkSpeedUpMin = 1.75f;
         private const float ChunkSpeedUpMax = 4f;
 
-        /// <summary>Скорость В СТОРОНЫ: сильная! Разлетаются горизонтально.</summary>
+        /// <summary>Скорость В СТОРОНЫ: сильная — разлетаются горизонтально.</summary>
         private const float ChunkSpeedSideMin = 0.25f;
         private const float ChunkSpeedSideMax = 1.5f;
 
-        /// <summary>Время жизни: ДОЛГОЕ — висят у земли.</summary>
+        /// <summary>Время жизни: долгое — висят у земли.</summary>
         private const float ChunkLifeMin = 3f;
         private const float ChunkLifeMax = 10f;
 
-        /// <summary>Гравитация: очень слабая — медленно оседают.</summary>
+        /// <summary>Гравитация: слабая — медленно оседают.</summary>
         private const float ChunkGravity = 0.3f;
 
         private const float ChunkAlpha = 0.85f;
 
-        //  DUST — пылевые облака, ОЧЕНЬ долго висят
+        // ── DUST — пылевые облака, ОЧЕНЬ долго висят ──
 
         private const int DustPerSurface = 13;
 
         private const float DustScaleMin = 0.025f;
         private const float DustScaleMax = 0.18f;
 
-        /// <summary>Пыль поднимается ЧУТЬ-ЧУТЬ.</summary>
+        /// <summary>Пыль поднимается едва заметно.</summary>
         private const float DustSpeedUpMin = 0.5f;
         private const float DustSpeedUpMax = 2f;
 
@@ -71,7 +79,7 @@ namespace ScavShrapnelMod
 
         private const float DustAlpha = 0.5f;
 
-        //  STREAKS — быстрые полосы от центра
+        // ── STREAKS — быстрые полосы от центра ──
 
         private const int StreaksPerSurface = 7;
 
@@ -89,18 +97,27 @@ namespace ScavShrapnelMod
 
         private const float StreakAlpha = 0.8f;
 
-        //  PUBLIC API
+        /// <summary>Порог intensity для спавна streaks (только рядом с центром).</summary>
+        private const float StreakIntensityThreshold = 0.4f;
+
+        // ── PUBLIC API ──
 
         /// <summary>
-        /// Спавнит ground debris. Горизонтальная развёртка по блокам,
-        /// поиск поверхности, три типа частиц с разной гравитацией.
+        /// Спавнит ground debris вокруг эпицентра взрыва.
+        /// 
+        /// Алгоритм:
+        /// 1. Горизонтальная развёртка по блокам в радиусе range × RangeMultiplier
+        /// 2. Для каждого X — вертикальный поиск поверхности (переход воздух→блок)
+        /// 3. На каждой найденной поверхности — три типа частиц
+        /// 4. Intensity убывает с расстоянием от эпицентра
         /// </summary>
+        /// <param name="epicenter">Мировая позиция центра взрыва.</param>
+        /// <param name="range">Радиус взрыва (из ExplosionParams).</param>
+        /// <param name="rng">Детерминированный генератор.</param>
         public static void SpawnFromExplosion(Vector2 epicenter, float range, System.Random rng)
         {
             Material unlitMat = ShrapnelVisuals.UnlitMaterial;
             if (unlitMat == null) return;
-
-            int totalSpawned = 0;
 
             try
             {
@@ -126,25 +143,23 @@ namespace ScavShrapnelMod
 
                     float radialX = (dx == 0) ? 0f : Mathf.Sign(dx);
 
-                    //  Комки 
+                    // Комки
                     int chunks = Mathf.Max(1, Mathf.RoundToInt(ChunksPerSurface * intensity));
                     for (int j = 0; j < chunks; j++)
                         SpawnChunk(worldPos, radialX, intensity, blockColor, unlitMat, rng);
 
-                    //  Пыль 
+                    // Пыль
                     int dust = Mathf.Max(1, Mathf.RoundToInt(DustPerSurface * intensity));
                     for (int j = 0; j < dust; j++)
                         SpawnDust(worldPos, radialX, intensity, blockColor, unlitMat, rng);
 
-                    //  Полосы (только рядом с центром) 
-                    if (intensity > 0.4f)
+                    // Полосы (только рядом с центром)
+                    if (intensity > StreakIntensityThreshold)
                     {
                         int streaks = Mathf.Max(1, Mathf.RoundToInt(StreaksPerSurface * intensity));
                         for (int j = 0; j < streaks; j++)
                             SpawnStreak(worldPos, radialX, intensity, blockColor, unlitMat, rng);
                     }
-
-                    totalSpawned++;
                 }
             }
             catch (Exception e)
@@ -153,8 +168,17 @@ namespace ScavShrapnelMod
             }
         }
 
-        //  SURFACE DETECTION
+        // ── SURFACE DETECTION ──
 
+        /// <summary>
+        /// Ищет поверхность (переход воздух→твёрдый блок) в столбце blockX.
+        /// Сканирует сверху вниз от epicenterBlockY + ScanUpMax до epicenterBlockY - ScanDownMax.
+        /// </summary>
+        /// <param name="blockX">X-координата столбца (блоковая).</param>
+        /// <param name="epicenterBlockY">Y-координата эпицентра (блоковая).</param>
+        /// <param name="surfacePos">Позиция найденного поверхностного блока.</param>
+        /// <param name="surfaceInfo">Информация о найденном блоке.</param>
+        /// <returns>true если поверхность найдена.</returns>
         private static bool FindSurface(int blockX, int epicenterBlockY,
             out Vector2Int surfacePos, out BlockInfo surfaceInfo)
         {
@@ -193,8 +217,16 @@ namespace ScavShrapnelMod
             return false;
         }
 
-        //  COLOR
+        // ── COLOR ──
 
+        /// <summary>
+        /// Определяет цвет частицы по типу блока.
+        /// 
+        /// Использует <c>IndexOf(OrdinalIgnoreCase)</c> вместо <c>ToLower().Contains()</c>
+        /// для zero-alloc сравнения строк.
+        /// 
+        /// Приоритет: metallic → stone/rock → sand → clay → wood → snow → health → fallback.
+        /// </summary>
         private static Color GetBlockColor(BlockInfo info, System.Random rng)
         {
             if (info.metallic)
@@ -203,25 +235,24 @@ namespace ScavShrapnelMod
                 return new Color(gray, gray, gray);
             }
 
-            string name = info.name != null ? info.name.ToLower() : "";
+            string name = info.name ?? string.Empty;
 
-            if (name.Contains("stone") || name.Contains("rock") ||
-                name.Contains("granite") || name.Contains("slate"))
+            if (ContainsAny(name, "stone", "rock", "granite", "slate"))
             {
                 float g = rng.Range(0.35f, 0.55f);
                 return new Color(g, g * 0.95f, g * 0.9f);
             }
 
-            if (name.Contains("sand"))
+            if (Contains(name, "sand"))
                 return new Color(rng.Range(0.7f, 0.85f), rng.Range(0.6f, 0.75f), rng.Range(0.3f, 0.45f));
 
-            if (name.Contains("clay"))
+            if (Contains(name, "clay"))
                 return new Color(rng.Range(0.55f, 0.7f), rng.Range(0.3f, 0.45f), rng.Range(0.2f, 0.3f));
 
-            if (name.Contains("wood") || name.Contains("plank") || name.Contains("log"))
+            if (ContainsAny(name, "wood", "plank", "log"))
                 return new Color(rng.Range(0.4f, 0.55f), rng.Range(0.25f, 0.35f), rng.Range(0.1f, 0.2f));
 
-            if (name.Contains("snow") || name.Contains("ice"))
+            if (ContainsAny(name, "snow", "ice"))
             {
                 float w = rng.Range(0.8f, 0.95f);
                 return new Color(w, w, w);
@@ -234,11 +265,27 @@ namespace ScavShrapnelMod
             return new Color(gg, gg, gg);
         }
 
-        //  PARTICLES
+        /// <summary>Case-insensitive Contains без аллокаций строк.</summary>
+        private static bool Contains(string source, string value)
+            => source.IndexOf(value, StringComparison.OrdinalIgnoreCase) >= 0;
+
+        /// <summary>Case-insensitive проверка нескольких подстрок без аллокаций.</summary>
+        private static bool ContainsAny(string source, params string[] values)
+        {
+            for (int i = 0; i < values.Length; i++)
+            {
+                if (source.IndexOf(values[i], StringComparison.OrdinalIgnoreCase) >= 0)
+                    return true;
+            }
+            return false;
+        }
+
+        // ── PARTICLES ──
 
         /// <summary>
         /// Крупный комок — летит НИЗКО и В СТОРОНЫ.
-        /// Gravity = 0.4 → медленно оседает.
+        /// Gravity = 0.3 → медленно оседает.
+        /// Регистрируется в <see cref="DebrisTracker"/>.
         /// </summary>
         private static void SpawnChunk(Vector2 worldPos, float radialX, float intensity,
             Color blockColor, Material mat, System.Random rng)
@@ -257,7 +304,6 @@ namespace ScavShrapnelMod
 
             Color c = new Color(blockColor.r, blockColor.g, blockColor.b, ChunkAlpha);
 
-            // НИЗКО вверх, СИЛЬНО в стороны
             float speedUp = rng.Range(ChunkSpeedUpMin, ChunkSpeedUpMax) * intensity;
             float speedSide = radialX * rng.Range(ChunkSpeedSideMin, ChunkSpeedSideMax)
                             + rng.Range(-1.5f, 1.5f);
@@ -266,11 +312,14 @@ namespace ScavShrapnelMod
             ash.Initialize(new Vector2(speedSide, speedUp),
                 rng.Range(ChunkLifeMin, ChunkLifeMax), c, rng.Range(0f, 6.28f),
                 ChunkGravity);
+
+            DebrisTracker.Register(obj);
         }
 
         /// <summary>
         /// Пыль — едва поднимается, ОЧЕНЬ долго висит.
         /// Gravity = 0.15 → почти "парит" в воздухе.
+        /// Регистрируется в <see cref="DebrisTracker"/>.
         /// </summary>
         private static void SpawnDust(Vector2 worldPos, float radialX, float intensity,
             Color blockColor, Material mat, System.Random rng)
@@ -297,10 +346,13 @@ namespace ScavShrapnelMod
             ash.Initialize(new Vector2(speedSide, speedUp),
                 rng.Range(DustLifeMin, DustLifeMax), dustColor, rng.Range(0f, 6.28f),
                 DustGravity);
+
+            DebrisTracker.Register(obj);
         }
 
         /// <summary>
         /// Быстрая полоса — "выстрел" грязи от центра.
+        /// Регистрируется в <see cref="DebrisTracker"/>.
         /// </summary>
         private static void SpawnStreak(Vector2 worldPos, float radialX, float intensity,
             Color blockColor, Material mat, System.Random rng)
@@ -321,12 +373,14 @@ namespace ScavShrapnelMod
             float speed = rng.Range(StreakSpeedMin, StreakSpeedMax) * intensity;
             Vector2 dir = new Vector2(
                 radialX * rng.Range(0.8f, 2f) + rng.Range(-0.3f, 0.3f),
-                rng.Range(0.3f, 1f)); // Почти горизонтально!
+                rng.Range(0.3f, 1f));
             dir.Normalize();
 
             AshParticle ash = obj.AddComponent<AshParticle>();
             ash.Initialize(dir * speed, rng.Range(StreakLifeMin, StreakLifeMax), c,
                 rng.Range(0f, 6.28f), StreakGravity);
+
+            DebrisTracker.Register(obj);
         }
     }
 }

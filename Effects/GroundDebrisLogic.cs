@@ -6,110 +6,115 @@ using ScavShrapnelMod.Core;
 namespace ScavShrapnelMod.Effects
 {
     /// <summary>
-    /// Visual ground debris particles from explosion shockwave.
+    /// Ground debris particles from explosion shockwave.
     ///
-    /// Spawns three particle types with distinct physics:
-    /// - Chunks: large, fly low and sideways, slow settling
-    /// - Dust: fine, almost hovers in air, very long lifetime
-    /// - Streaks: fast "shots" of dirt from epicenter
+    /// Material classification uses <see cref="BlockClassifier"/> — single source of truth.
     ///
-    /// Scan radius and particle counts configurable via ShrapnelConfig.
+    /// Lighting:
+    ///   All debris uses LitMaterial (dark in dark areas).
+    ///   Ground debris is inert matter, not self-luminous.
+    ///
     /// All objects registered in <see cref="DebrisTracker"/>.
     /// </summary>
     public static class GroundDebrisLogic
     {
-        // ── SCAN PARAMETERS ──
-        private const int ScanStepX = 1;
+        // ────────────────────────────────────────────────────────────
+        //  FACE NORMALS
+        // ────────────────────────────────────────────────────────────
 
-        /// <summary>Blocks DOWN from epicenter for surface search.</summary>
-        private const int ScanDownMax = 25;
+        private static readonly Vector2 NormalUp    = Vector2.up;
+        private static readonly Vector2 NormalDown  = Vector2.down;
+        private static readonly Vector2 NormalLeft  = Vector2.left;
+        private static readonly Vector2 NormalRight = Vector2.right;
 
-        /// <summary>Blocks UP from epicenter for surface search.</summary>
-        private const int ScanUpMax = 20;
+        // ────────────────────────────────────────────────────────────
+        //  PRE-ALLOCATED FACE BUFFERS
+        // ────────────────────────────────────────────────────────────
 
-        // ── CHUNK PARAMETERS ──
-        private const int ChunksPerSurface = 8;
+        private static readonly Vector2[] _faceNormals   = new Vector2[4];
+        private static readonly Vector2[] _facePositions = new Vector2[4];
+
+        // ────────────────────────────────────────────────────────────
+        //  SCAN / WAVE / BUDGET
+        // ────────────────────────────────────────────────────────────
+
+        private const int   ScanDownMax = 25;
+        private const int   ScanUpMax   = 20;
+        private const float WaveSpeed   = 50f;
+        private const int   MaxTotal    = 3000;
+
+        // ────────────────────────────────────────────────────────────
+        //  PER-SURFACE BASE PARTICLE COUNTS
+        // ────────────────────────────────────────────────────────────
+
+        private const int   ChunksPerSurface  = 3;
+        private const int   DustPerSurface    = 6;
+        private const int   StreaksPerSurface  = 3;
+        private const float StreakThreshold    = 0.35f;
+
+        // ────────────────────────────────────────────────────────────
+        //  CHUNK PARAMETERS
+        // ────────────────────────────────────────────────────────────
+
         private const float ChunkScaleMin = 0.12f;
         private const float ChunkScaleMax = 0.28f;
-        private const float ChunkSpeedUpMin = 2f;
-        private const float ChunkSpeedUpMax = 5f;
-        private const float ChunkSpeedSideMin = 0.5f;
-        private const float ChunkSpeedSideMax = 2f;
-        private const float ChunkLifeMin = 4f;
-        private const float ChunkLifeMax = 12f;
-        private const float ChunkAlpha = 0.9f;
+        private const float ChunkSpeedMin = 2f;
+        private const float ChunkSpeedMax = 5f;
+        private const float ChunkLifeMin  = 8f;
+        private const float ChunkLifeMax  = 20f;
+        private const float ChunkAlpha    = 0.9f;
 
-        // ── DUST PARAMETERS ──
-        private const int DustPerSurface = 18;
+        // ────────────────────────────────────────────────────────────
+        //  DUST PARAMETERS
+        // ────────────────────────────────────────────────────────────
+
         private const float DustScaleMin = 0.03f;
         private const float DustScaleMax = 0.2f;
-        private const float DustSpeedUpMin = 0.8f;
-        private const float DustSpeedUpMax = 3f;
-        private const float DustSpeedSideMin = 0.8f;
-        private const float DustSpeedSideMax = 2.5f;
-        private const float DustLifeMin = 6f;
-        private const float DustLifeMax = 25f;
-        private const float DustAlpha = 0.55f;
+        private const float DustSpeedMin = 0.8f;
+        private const float DustSpeedMax = 3f;
+        private const float DustLifeMin  = 15f;
+        private const float DustLifeMax  = 40f;
+        private const float DustAlpha    = 0.55f;
 
-        // ── STREAK PARAMETERS ──
-        private const int StreaksPerSurface = 10;
+        // ────────────────────────────────────────────────────────────
+        //  STREAK PARAMETERS
+        // ────────────────────────────────────────────────────────────
+
         private const float StreakScaleMin = 0.06f;
         private const float StreakScaleMax = 0.14f;
         private const float StreakSpeedMin = 15f;
         private const float StreakSpeedMax = 30f;
-        private const float StreakLifeMin = 0.5f;
-        private const float StreakLifeMax = 1.8f;
-        private const float StreakAlpha = 0.85f;
-        private const float StreakIntensityThreshold = 0.35f;
+        private const float StreakLifeMin  = 0.5f;
+        private const float StreakLifeMax  = 1.8f;
+        private const float StreakAlpha    = 0.85f;
 
-        /// <summary>
-        /// Spawns ground debris around explosion epicenter.
-        /// Uses wide scan range for surface detection.
-        ///
-        /// WHY: Range multiplier from config (default 3.5) ensures debris
-        /// covers a wide area. CountMultiplier scales particle density.
-        /// </summary>
+        // ────────────────────────────────────────────────────────────
+        //  AIRWAVE PARAMETERS
+        // ────────────────────────────────────────────────────────────
+
+        private const int   AirwavePerColumn = 2;
+        private const float AirwaveScaleMin  = 0.04f;
+        private const float AirwaveScaleMax  = 0.10f;
+        private const float AirwaveSpeedMin  = 5f;
+        private const float AirwaveSpeedMax  = 10f;
+        private const float AirwaveLifeMin   = 2f;
+        private const float AirwaveLifeMax   = 5f;
+        private const float AirwaveAlpha     = 0.25f;
+
+        // ════════════════════════════════════════════════════════════
+        //  PUBLIC API
+        // ════════════════════════════════════════════════════════════
+
         public static void SpawnFromExplosion(Vector2 epicenter, float range, System.Random rng)
         {
-            if (ShrapnelVisuals.UnlitMaterial == null) return;
+            // WHY: Check LitMaterial first, fall back to UnlitMaterial.
+            // If neither exists, skip entirely.
+            if (ShrapnelVisuals.LitMaterial == null
+                && ShrapnelVisuals.UnlitMaterial == null) return;
 
             try
             {
-                Vector2Int epicenterBlock = WorldGeneration.world.WorldToBlockPos(epicenter);
-                float rangeMultiplier = ShrapnelConfig.GroundDebrisRangeMultiplier.Value;
-                float countMultiplier = ShrapnelConfig.GroundDebrisCountMultiplier.Value;
-                int scanRange = Mathf.CeilToInt(range * rangeMultiplier);
-
-                int surfacesFound = 0;
-
-                for (int dx = -scanRange; dx <= scanRange; dx += ScanStepX)
-                {
-                    int blockX = epicenterBlock.x + dx;
-
-                    if (!FindSurface(blockX, epicenterBlock.y, out Vector2Int surfacePos, out BlockInfo surfaceInfo))
-                        continue;
-
-                    surfacesFound++;
-
-                    Vector2 worldPos = WorldGeneration.world.BlockToWorldPos(
-                        new Vector2Int(surfacePos.x, surfacePos.y + 1));
-
-                    Color blockColor = GetBlockColor(surfaceInfo, rng);
-
-                    float dist = Mathf.Abs(dx);
-                    float intensity = Mathf.Clamp01(1f - dist / (scanRange * 1.1f));
-                    intensity = Mathf.Max(intensity, 0.15f);
-
-                    float radialX = (dx == 0) ? 0f : Mathf.Sign(dx);
-
-                    SpawnSurfaceDebris(worldPos, radialX, intensity, blockColor, rng, countMultiplier);
-                }
-
-                if (ShrapnelConfig.DebugLogging.Value)
-                {
-                    Debug.Log($"[ShrapnelMod] GroundDebris: scanRange={scanRange}" +
-                              $" surfaces={surfacesFound} epicY={epicenterBlock.y}");
-                }
+                PropagateWave(epicenter, range, rng);
             }
             catch (Exception e)
             {
@@ -117,194 +122,306 @@ namespace ScavShrapnelMod.Effects
             }
         }
 
-        /// <summary>
-        /// Spawns all debris types for a single surface point.
-        /// </summary>
-        private static void SpawnSurfaceDebris(Vector2 worldPos, float radialX,
-            float intensity, Color blockColor, System.Random rng, float countMultiplier)
+        // ════════════════════════════════════════════════════════════
+        //  WAVE PROPAGATION
+        // ════════════════════════════════════════════════════════════
+
+        private static void PropagateWave(Vector2 epicenter, float range, System.Random rng)
         {
-            // Chunks
-            int chunks = Mathf.Max(1, Mathf.RoundToInt(ChunksPerSurface * intensity * countMultiplier));
-            for (int j = 0; j < chunks; j++)
-                SpawnChunk(worldPos, radialX, intensity, blockColor, rng);
+            Vector2Int epi = WorldGeneration.world.WorldToBlockPos(epicenter);
 
-            // Dust
-            int dust = Mathf.Max(1, Mathf.RoundToInt(DustPerSurface * intensity * countMultiplier));
-            for (int j = 0; j < dust; j++)
-                SpawnDust(worldPos, radialX, intensity, blockColor, rng);
+            float rangeMult = ShrapnelConfig.GroundDebrisRangeMultiplier.Value;
+            float countMult = ShrapnelConfig.GroundDebrisCountMultiplier.Value;
 
-            // Streaks (only near center)
-            if (intensity > StreakIntensityThreshold)
+            int   scanRange = Mathf.CeilToInt(range * rangeMult);
+            float maxDist   = scanRange + 0.5f;
+
+            int yMin = epi.y - ScanDownMax;
+            int yMax = epi.y + ScanUpMax;
+
+            int total    = 0;
+            int surfaces = 0;
+
+            for (int i = 0; i <= scanRange; i++)
             {
-                int streaks = Mathf.Max(1, Mathf.RoundToInt(StreaksPerSurface * intensity * countMultiplier));
-                for (int j = 0; j < streaks; j++)
-                    SpawnStreak(worldPos, radialX, intensity, blockColor, rng);
+                if (total >= MaxTotal) break;
+
+                int firstSide  = (i % 2 == 0) ? 0 : 1;
+                int secondSide = 1 - firstSide;
+
+                for (int s = 0; s < 2; s++)
+                {
+                    int side = (s == 0) ? firstSide : secondSide;
+
+                    if (i == 0 && side == 1) continue;
+                    if (total >= MaxTotal) break;
+
+                    int dx     = (side == 0) ? i : -i;
+                    int blockX = epi.x + dx;
+
+                    bool columnHadSurface = false;
+
+                    for (int y = yMax; y >= yMin; y--)
+                    {
+                        if (total >= MaxTotal) break;
+
+                        ushort blockId;
+                        try
+                        {
+                            blockId = WorldGeneration.world.GetBlock(
+                                new Vector2Int(blockX, y));
+                        }
+                        catch (IndexOutOfRangeException) { continue; }
+
+                        if (blockId == 0) continue;
+
+                        bool fUp    = IsAir(blockX,     y + 1);
+                        bool fDown  = IsAir(blockX,     y - 1);
+                        bool fLeft  = IsAir(blockX - 1, y);
+                        bool fRight = IsAir(blockX + 1, y);
+
+                        if (!fUp && !fDown && !fLeft && !fRight) continue;
+
+                        BlockInfo info = null;
+                        try { info = WorldGeneration.world.GetBlockInfo(blockId); }
+                        catch { /* null safe */ }
+
+                        columnHadSurface = true;
+                        surfaces++;
+
+                        // WHY: Single source of truth — BlockClassifier handles all
+                        // material classification from hitsound/stepsound/metallic flag.
+                        MaterialCategory cat = BlockClassifier.Classify(info);
+
+                        float distY  = y - epi.y;
+                        float dist   = Mathf.Sqrt((float)(dx * dx) + distY * distY);
+                        float energy = Mathf.Clamp01(1f - dist / (maxDist * 1.1f));
+                        energy = Mathf.Max(energy, 0.15f);
+
+                        float delay = dist / WaveSpeed;
+
+                        Color blockColor = BlockClassifier.GetColor(cat, rng);
+                        float matMult    = BlockClassifier.GetDustMultiplier(cat);
+
+                        if (ShrapnelConfig.DebugLogging.Value && surfaces <= 5)
+                        {
+                            string bName = info != null ? info.name : "NULL";
+                            string bHit  = info != null ? (info.hitsound ?? "?") : "?";
+                            string bStep = info != null ? (info.stepsound ?? "?") : "?";
+                            float bHp    = info != null ? info.health : -1f;
+                            Debug.Log($"[ShrapnelMod] Block: name='{bName}'" +
+                                      $" hp={bHp:F0} hit={bHit} step={bStep}" +
+                                      $" cat={cat} matMult={matMult:F2}");
+                        }
+
+                        Vector2 blockWorld = WorldGeneration.world.BlockToWorldPos(
+                            new Vector2Int(blockX, y));
+                        int faceCount = CollectFaces(
+                            blockWorld, fUp, fDown, fLeft, fRight);
+                        if (faceCount == 0) continue;
+
+                        int budget = MaxTotal - total;
+                        total += EmitSurfaceParticles(
+                            faceCount, energy, blockColor, matMult,
+                            rng, delay, countMult, budget);
+                    }
+
+                    if (!columnHadSurface && Mathf.Abs(dx) >= 2 && total < MaxTotal)
+                    {
+                        float absDist = Mathf.Abs(dx);
+                        float energy  = Mathf.Clamp01(1f - absDist / (maxDist * 1.1f));
+
+                        if (energy > 0.1f)
+                        {
+                            float dirSign = (dx > 0) ? 1f : -1f;
+                            float delay   = absDist / WaveSpeed;
+                            Vector2 airPos = WorldGeneration.world.BlockToWorldPos(
+                                new Vector2Int(blockX, epi.y));
+                            int budget = MaxTotal - total;
+                            total += SpawnAirwave(
+                                airPos, dirSign, energy,
+                                rng, delay, countMult, budget);
+                        }
+                    }
+                }
+            }
+
+            if (ShrapnelConfig.DebugLogging.Value)
+            {
+                Debug.Log($"[ShrapnelMod] GroundDebris:" +
+                          $" range={range:F0} scan={scanRange}" +
+                          $" surfaces={surfaces} particles={total}");
             }
         }
 
-        // ── PARTICLE SPAWNERS ──
+        // ════════════════════════════════════════════════════════════
+        //  FACE COLLECTION
+        // ════════════════════════════════════════════════════════════
 
-        private static void SpawnChunk(Vector2 worldPos, float radialX, float intensity,
-            Color blockColor, System.Random rng)
+        private static int CollectFaces(
+            Vector2 blockWorld,
+            bool up, bool down, bool left, bool right)
         {
-            Vector2 position = worldPos + rng.InsideUnitCircle() * 0.4f;
+            int n = 0;
+            if (up)    { _faceNormals[n] = NormalUp;    _facePositions[n] = blockWorld + new Vector2(0f, 0.5f);   n++; }
+            if (down)  { _faceNormals[n] = NormalDown;  _facePositions[n] = blockWorld + new Vector2(0f, -0.5f);  n++; }
+            if (left)  { _faceNormals[n] = NormalLeft;  _facePositions[n] = blockWorld + new Vector2(-0.5f, 0f);  n++; }
+            if (right) { _faceNormals[n] = NormalRight; _facePositions[n] = blockWorld + new Vector2(0.5f, 0f);   n++; }
+            return n;
+        }
 
-            float scale = rng.Range(ChunkScaleMin, ChunkScaleMax) * (0.6f + intensity * 0.8f);
+        // ════════════════════════════════════════════════════════════
+        //  PARTICLE EMISSION
+        // ════════════════════════════════════════════════════════════
+
+        private static int EmitSurfaceParticles(
+            int faceCount, float energy, Color blockColor, float materialMult,
+            System.Random rng, float delay, float countMult, int budget)
+        {
+            int spawned = 0;
+
+            int chunks = Mathf.Max(1, Mathf.RoundToInt(ChunksPerSurface * energy * countMult));
+            chunks = Mathf.Min(chunks, budget);
+            for (int j = 0; j < chunks; j++)
+            {
+                int fi = j % faceCount;
+                SpawnChunk(_facePositions[fi], _faceNormals[fi], energy, blockColor, rng, delay);
+            }
+            spawned += chunks; budget -= chunks;
+            if (budget <= 0) return spawned;
+
+            int dust = Mathf.Max(1, Mathf.RoundToInt(DustPerSurface * energy * countMult * materialMult));
+            dust = Mathf.Min(dust, budget);
+            for (int j = 0; j < dust; j++)
+            {
+                int fi = j % faceCount;
+                SpawnDust(_facePositions[fi], _faceNormals[fi], energy, blockColor, rng, delay);
+            }
+            spawned += dust; budget -= dust;
+            if (budget <= 0) return spawned;
+
+            if (energy > StreakThreshold)
+            {
+                int streaks = Mathf.Max(1, Mathf.RoundToInt(StreaksPerSurface * energy * countMult));
+                streaks = Mathf.Min(streaks, budget);
+                for (int j = 0; j < streaks; j++)
+                {
+                    int fi = j % faceCount;
+                    SpawnStreak(_facePositions[fi], _faceNormals[fi], energy, blockColor, rng, delay);
+                }
+                spawned += streaks;
+            }
+
+            return spawned;
+        }
+
+        // ════════════════════════════════════════════════════════════
+        //  PARTICLE SPAWNERS — all use ParticleHelper.SpawnLit
+        // ════════════════════════════════════════════════════════════
+
+        private static void SpawnChunk(
+            Vector2 pos, Vector2 normal, float energy,
+            Color blockColor, System.Random rng, float delay)
+        {
+            Vector2 position = pos + rng.InsideUnitCircle() * 0.4f;
+            float scale = rng.Range(ChunkScaleMin, ChunkScaleMax) * (0.6f + energy * 0.8f);
             Color color = new Color(blockColor.r, blockColor.g, blockColor.b, ChunkAlpha);
 
-            float speedUp = rng.Range(ChunkSpeedUpMin, ChunkSpeedUpMax) * intensity;
-            float speedSide = radialX * rng.Range(ChunkSpeedSideMin, ChunkSpeedSideMax)
-                            + rng.Range(-2f, 2f);
-            Vector2 velocity = new Vector2(speedSide, speedUp);
+            Vector2 tangent = new Vector2(-normal.y, normal.x);
+            Vector2 velocity = normal * rng.Range(ChunkSpeedMin, ChunkSpeedMax) * energy
+                             + tangent * rng.Range(-2f, 2f);
 
             var visual = new VisualParticleParams(scale, color, 12,
                 (ShrapnelVisuals.TriangleShape)rng.Next(0, 6));
             var physics = AshPhysicsParams.Chunk(velocity, rng.Range(ChunkLifeMin, ChunkLifeMax), rng);
 
-            ParticleHelper.SpawnAshParticle("GndChunk", position, visual, physics, rng.Range(0f, 100f));
+            ParticleHelper.SpawnLit("GndChunk", position, visual, physics,
+                rng.Range(0f, 100f), delay);
         }
 
-        private static void SpawnDust(Vector2 worldPos, float radialX, float intensity,
-            Color blockColor, System.Random rng)
+        private static void SpawnDust(
+            Vector2 pos, Vector2 normal, float energy,
+            Color blockColor, System.Random rng, float delay)
         {
-            Vector2 position = worldPos + rng.InsideUnitCircle() * 0.9f;
+            Vector2 position = pos + rng.InsideUnitCircle() * 0.9f;
+            float scale = rng.Range(DustScaleMin, DustScaleMax) * (0.7f + energy * 0.6f);
 
-            float scale = rng.Range(DustScaleMin, DustScaleMax) * (0.7f + intensity * 0.6f);
-            Color dustColor = Color.Lerp(blockColor, new Color(0.65f, 0.6f, 0.55f), 0.35f);
+            Color dustColor = Color.Lerp(blockColor, new Color(0.55f, 0.53f, 0.50f), 0.35f);
             dustColor.a = DustAlpha;
 
-            float speedUp = rng.Range(DustSpeedUpMin, DustSpeedUpMax) * intensity;
-            float speedSide = radialX * rng.Range(DustSpeedSideMin, DustSpeedSideMax)
-                            + rng.Range(-1.5f, 1.5f);
-            Vector2 velocity = new Vector2(speedSide, speedUp);
+            Vector2 tangent = new Vector2(-normal.y, normal.x);
+            Vector2 velocity = normal * rng.Range(DustSpeedMin, DustSpeedMax) * energy
+                             + tangent * rng.Range(-1.5f, 1.5f);
 
             var visual = new VisualParticleParams(scale, dustColor, 11,
                 ShrapnelVisuals.TriangleShape.Chunk);
             var physics = AshPhysicsParams.Dust(velocity, rng.Range(DustLifeMin, DustLifeMax), rng);
 
-            ParticleHelper.SpawnAshParticle("GndDust", position, visual, physics, rng.Range(0f, 100f));
+            ParticleHelper.SpawnLit("GndDust", position, visual, physics,
+                rng.Range(0f, 100f), delay);
         }
 
-        private static void SpawnStreak(Vector2 worldPos, float radialX, float intensity,
-            Color blockColor, System.Random rng)
+        private static void SpawnStreak(
+            Vector2 pos, Vector2 normal, float energy,
+            Color blockColor, System.Random rng, float delay)
         {
-            Vector2 position = worldPos + rng.InsideUnitCircle() * 0.2f;
-
+            Vector2 position = pos + rng.InsideUnitCircle() * 0.2f;
             float scale = rng.Range(StreakScaleMin, StreakScaleMax);
-            Color color = new Color(blockColor.r * 0.75f, blockColor.g * 0.75f, blockColor.b * 0.75f, StreakAlpha);
+            Color color = new Color(blockColor.r * 0.75f, blockColor.g * 0.75f,
+                blockColor.b * 0.75f, StreakAlpha);
 
-            float speed = rng.Range(StreakSpeedMin, StreakSpeedMax) * intensity;
-            Vector2 dir = new Vector2(
-                radialX * rng.Range(1f, 2.5f) + rng.Range(-0.4f, 0.4f),
-                rng.Range(0.2f, 0.8f)).normalized;
+            Vector2 tangent = new Vector2(-normal.y, normal.x);
+            Vector2 dir = (normal + tangent * rng.Range(-0.4f, 0.4f)).normalized;
+            float speed = rng.Range(StreakSpeedMin, StreakSpeedMax) * energy;
 
             var visual = new VisualParticleParams(scale, color, 12,
                 ShrapnelVisuals.TriangleShape.Needle);
-            var physics = AshPhysicsParams.Streak(dir * speed, rng.Range(StreakLifeMin, StreakLifeMax));
+            var physics = AshPhysicsParams.Streak(dir * speed,
+                rng.Range(StreakLifeMin, StreakLifeMax));
 
-            ParticleHelper.SpawnAshParticle("GndStreak", position, visual, physics, rng.Range(0f, 100f));
+            ParticleHelper.SpawnLit("GndStreak", position, visual, physics,
+                rng.Range(0f, 100f), delay);
         }
 
-        // ── SURFACE DETECTION ──
-
-        /// <summary>
-        /// Finds surface (air-to-solid transition) in column blockX.
-        /// Scans from top to bottom looking for air->block transition.
-        ///
-        /// WHY: Previous version only scanned 5 blocks up from epicenter,
-        /// missing surfaces when explosion was below ground or in a cave.
-        /// Now scans 20 blocks up and 25 blocks down for full coverage.
-        /// Also finds surfaces BELOW the epicenter (ceiling of cave below).
-        /// </summary>
-        private static bool FindSurface(int blockX, int epicenterBlockY,
-            out Vector2Int surfacePos, out BlockInfo surfaceInfo)
+        private static int SpawnAirwave(
+            Vector2 pos, float dirSign, float energy,
+            System.Random rng, float delay, float countMult, int budget)
         {
-            surfacePos = Vector2Int.zero;
-            surfaceInfo = null;
+            int count = Mathf.Max(1, Mathf.RoundToInt(AirwavePerColumn * energy * countMult));
+            count = Mathf.Min(count, budget);
 
-            int startY = epicenterBlockY + ScanUpMax;
-            int endY = epicenterBlockY - ScanDownMax;
-            bool wasAir = false;
-
-            for (int y = startY; y >= endY; y--)
+            for (int j = 0; j < count; j++)
             {
-                try
-                {
-                    Vector2Int pos = new Vector2Int(blockX, y);
-                    ushort blockId = WorldGeneration.world.GetBlock(pos);
+                Vector2 spawnPos = pos + new Vector2(rng.Range(-0.2f, 0.2f), rng.Range(-0.5f, 0.5f));
+                float scale = rng.Range(AirwaveScaleMin, AirwaveScaleMax) * (0.5f + energy * 0.5f);
 
-                    if (blockId == 0)
-                    {
-                        wasAir = true;
-                    }
-                    else if (wasAir)
-                    {
-                        BlockInfo info = WorldGeneration.world.GetBlockInfo(blockId);
-                        if (info != null)
-                        {
-                            surfacePos = pos;
-                            surfaceInfo = info;
-                            return true;
-                        }
-                    }
-                }
-                catch (IndexOutOfRangeException) { continue; }
+                float g = rng.Range(0.45f, 0.6f);
+                Color color = new Color(g, g * 0.97f, g * 0.94f, AirwaveAlpha * energy);
+
+                Vector2 velocity = new Vector2(
+                    dirSign * rng.Range(AirwaveSpeedMin, AirwaveSpeedMax) * energy,
+                    rng.Range(-0.5f, 1.5f));
+
+                var visual = new VisualParticleParams(scale, color, 10,
+                    ShrapnelVisuals.TriangleShape.Chunk);
+                var physics = AshPhysicsParams.Dust(velocity,
+                    rng.Range(AirwaveLifeMin, AirwaveLifeMax), rng);
+
+                ParticleHelper.SpawnLit("GndWave", spawnPos, visual, physics,
+                    rng.Range(0f, 100f), delay);
             }
 
-            return false;
+            return count;
         }
 
-        // ── BLOCK COLOR ──
+        // ════════════════════════════════════════════════════════════
+        //  HELPERS
+        // ════════════════════════════════════════════════════════════
 
-        private static Color GetBlockColor(BlockInfo info, System.Random rng)
+        private static bool IsAir(int blockX, int blockY)
         {
-            if (info.metallic)
-            {
-                float gray = rng.Range(0.25f, 0.4f);
-                return new Color(gray, gray, gray);
-            }
-
-            string name = info.name ?? string.Empty;
-
-            if (ContainsAny(name, "stone", "rock", "granite", "slate"))
-            {
-                float g = rng.Range(0.35f, 0.55f);
-                return new Color(g, g * 0.95f, g * 0.9f);
-            }
-
-            if (Contains(name, "sand"))
-                return new Color(rng.Range(0.7f, 0.85f), rng.Range(0.6f, 0.75f), rng.Range(0.3f, 0.45f));
-
-            if (Contains(name, "clay"))
-                return new Color(rng.Range(0.55f, 0.7f), rng.Range(0.3f, 0.45f), rng.Range(0.2f, 0.3f));
-
-            if (ContainsAny(name, "wood", "plank", "log"))
-                return new Color(rng.Range(0.4f, 0.55f), rng.Range(0.25f, 0.35f), rng.Range(0.1f, 0.2f));
-
-            if (ContainsAny(name, "snow", "ice"))
-            {
-                float w = rng.Range(0.8f, 0.95f);
-                return new Color(w, w, w);
-            }
-
-            if (info.health < 200f)
-                return new Color(rng.Range(0.3f, 0.45f), rng.Range(0.2f, 0.3f), rng.Range(0.1f, 0.18f));
-
-            float gg = rng.Range(0.3f, 0.5f);
-            return new Color(gg, gg, gg);
-        }
-
-        private static bool Contains(string source, string value)
-            => source.IndexOf(value, StringComparison.OrdinalIgnoreCase) >= 0;
-
-        private static bool ContainsAny(string source, params string[] values)
-        {
-            for (int i = 0; i < values.Length; i++)
-            {
-                if (source.IndexOf(values[i], StringComparison.OrdinalIgnoreCase) >= 0)
-                    return true;
-            }
-            return false;
+            try { return WorldGeneration.world.GetBlock(new Vector2Int(blockX, blockY)) == 0; }
+            catch (IndexOutOfRangeException) { return true; }
         }
     }
 }

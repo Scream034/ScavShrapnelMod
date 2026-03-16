@@ -15,14 +15,13 @@ namespace ScavShrapnelMod
     /// - Explosions: explosion classification
     /// - Effects.Explosion: smoke, embers, crater dust
     /// - Effects.BulletImpact: sparks, flash, metal chips
+    /// - GroundDebris: surface debris particles
     /// - Lifetime: debris/stuck duration
     /// - Interact: player interaction
     /// </summary>
     public static class ShrapnelConfig
     {
-        // ══════════════════════════════════════════════════════════════════
         //  PERFORMANCE
-        // ══════════════════════════════════════════════════════════════════
 
         /// <summary>Max alive physical shrapnel (ShrapnelProjectile) objects.</summary>
         public static ConfigEntry<int> MaxAliveDebris;
@@ -48,9 +47,7 @@ namespace ScavShrapnelMod
         /// <summary>Enable Debug.Log for each explosion.</summary>
         public static ConfigEntry<bool> DebugLogging;
 
-        // ══════════════════════════════════════════════════════════════════
         //  BULLETS
-        // ══════════════════════════════════════════════════════════════════
 
         /// <summary>Enable physical shrapnel fragments from bullet impacts.</summary>
         public static ConfigEntry<bool> EnableBulletFragments;
@@ -82,9 +79,7 @@ namespace ScavShrapnelMod
         /// <summary>Heat multiplier for bullet shrapnel.</summary>
         public static ConfigEntry<float> BulletHeatMultiplier;
 
-        // ══════════════════════════════════════════════════════════════════
         //  EXPLOSIONS: CLASSIFICATION
-        // ══════════════════════════════════════════════════════════════════
 
         /// <summary>Tolerance for explosion parameter comparison (+/- epsilon).</summary>
         public static ConfigEntry<float> ClassifyEpsilon;
@@ -114,9 +109,7 @@ namespace ScavShrapnelMod
         public static ConfigEntry<int> MineVisualMin;
         public static ConfigEntry<int> MineVisualMax;
 
-        // ══════════════════════════════════════════════════════════════════
         //  GROUND DEBRIS
-        // ══════════════════════════════════════════════════════════════════
 
         /// <summary>Multiplier for ground debris scan radius relative to explosion range.</summary>
         public static ConfigEntry<float> GroundDebrisRangeMultiplier;
@@ -124,9 +117,19 @@ namespace ScavShrapnelMod
         /// <summary>Multiplier for ground debris particle count.</summary>
         public static ConfigEntry<float> GroundDebrisCountMultiplier;
 
-        // ══════════════════════════════════════════════════════════════════
+        /// <summary>Shockwave propagation speed for ground debris delay (world units/sec).</summary>
+        public static ConfigEntry<float> GroundDebrisShockwaveSpeed;
+
+        /// <summary>Base particle budget per exposed block face.</summary>
+        public static ConfigEntry<int> GroundDebrisBudgetPerBlock;
+
+        /// <summary>Max total ground debris particles per explosion.</summary>
+        public static ConfigEntry<int> GroundDebrisMaxTotal;
+
+        /// <summary>Multiplier for block debris particle count from destroyed blocks.</summary>
+        public static ConfigEntry<float> BlockDebrisCountMultiplier;
+
         //  SPARKS (SHRAPNEL PROJECTILE IMPACTS)
-        // ══════════════════════════════════════════════════════════════════
 
         /// <summary>Min sparks on metal impact.</summary>
         public static ConfigEntry<int> MetalImpactSparksMin;
@@ -146,9 +149,7 @@ namespace ScavShrapnelMod
         /// <summary>Max debris particles on ricochet (exclusive).</summary>
         public static ConfigEntry<int> RicochetDebrisMax;
 
-        // ══════════════════════════════════════════════════════════════════
         //  ADVANCED EXPLOSION EFFECTS
-        // ══════════════════════════════════════════════════════════════════
 
         /// <summary>Enable smoke column effect.</summary>
         public static ConfigEntry<bool> EnableSmokeColumn;
@@ -174,9 +175,7 @@ namespace ScavShrapnelMod
         /// <summary>Crater dust lifetime multiplier.</summary>
         public static ConfigEntry<float> CraterDustLifetimeMultiplier;
 
-        // ══════════════════════════════════════════════════════════════════
         //  ENHANCED BULLET IMPACT EFFECTS
-        // ══════════════════════════════════════════════════════════════════
 
         /// <summary>Min streak sparks on regular impact.</summary>
         public static ConfigEntry<int> ImpactStreakSparksMin;
@@ -202,9 +201,7 @@ namespace ScavShrapnelMod
         /// <summary>Max metal chips on impact.</summary>
         public static ConfigEntry<int> ImpactMetalChipsMax;
 
-        // ══════════════════════════════════════════════════════════════════
         //  DEBRIS LIFETIME
-        // ══════════════════════════════════════════════════════════════════
 
         /// <summary>Metal debris lifetime (sec).</summary>
         public static ConfigEntry<float> DebrisLifetimeMetal;
@@ -224,16 +221,12 @@ namespace ScavShrapnelMod
         /// <summary>Stuck shrapnel lifetime (sec).</summary>
         public static ConfigEntry<float> StuckLifetime;
 
-        // ══════════════════════════════════════════════════════════════════
         //  INTERACT
-        // ══════════════════════════════════════════════════════════════════
 
         /// <summary>Max distance to destroy debris by clicking (tiles).</summary>
         public static ConfigEntry<float> MaxInteractDistance;
 
-        // ══════════════════════════════════════════════════════════════════
         //  BIND METHOD
-        // ══════════════════════════════════════════════════════════════════
 
         /// <summary>
         /// Initializes all config entries. Call from Plugin.Awake().
@@ -245,9 +238,9 @@ namespace ScavShrapnelMod
                 new ConfigDescription("Max alive physical shrapnel objects. Oldest removed first.",
                     new AcceptableValueRange<int>(50, 2000)));
 
-            MaxAliveVisualParticles = cfg.Bind("Performance", "MaxAliveVisualParticles", 3000,
+            MaxAliveVisualParticles = cfg.Bind("Performance", "MaxAliveVisualParticles", 5000,
                 new ConfigDescription("Max alive visual particles (ash, dust, sparks). Oldest removed first.",
-                    new AcceptableValueRange<int>(500, 10000)));
+                    new AcceptableValueRange<int>(500, 15000)));
 
             SpawnCountMultiplier = cfg.Bind("Performance", "SpawnCountMultiplier", 1f,
                 new ConfigDescription("Global spawn count multiplier (0.1-3.0).",
@@ -358,11 +351,30 @@ namespace ScavShrapnelMod
             // ── Ground Debris ──
             GroundDebrisRangeMultiplier = cfg.Bind("GroundDebris", "RangeMultiplier", 3.5f,
                 new ConfigDescription("Scan radius multiplier relative to explosion range.",
-                    new AcceptableValueRange<float>(1f, 6f)));
+                    new AcceptableValueRange<float>(1f, 8f)));
 
-            GroundDebrisCountMultiplier = cfg.Bind("GroundDebris", "CountMultiplier", 1.5f,
+            GroundDebrisCountMultiplier = cfg.Bind("GroundDebris", "CountMultiplier", 2.0f,
                 new ConfigDescription("Particle count multiplier for ground debris.",
-                    new AcceptableValueRange<float>(0.5f, 4f)));
+                    new AcceptableValueRange<float>(0.5f, 6f)));
+
+            GroundDebrisShockwaveSpeed = cfg.Bind("GroundDebris", "ShockwaveSpeed", 40f,
+                new ConfigDescription("Shockwave propagation speed (world units/sec). " +
+                    "Controls delay before distant debris appears. Higher = more instant.",
+                    new AcceptableValueRange<float>(10f, 200f)));
+
+            GroundDebrisBudgetPerBlock = cfg.Bind("GroundDebris", "BudgetPerBlock", 150,
+                new ConfigDescription("Base particle budget per surface block. " +
+                    "Split evenly across exposed faces. Multiplied by intensity and CountMultiplier.",
+                    new AcceptableValueRange<int>(4, 400)));
+
+            GroundDebrisMaxTotal = cfg.Bind("GroundDebris", "MaxTotal", 4000,
+                new ConfigDescription("Max total ground debris particles per explosion. " +
+                    "Center-outward scan ensures symmetric distribution.",
+                    new AcceptableValueRange<int>(200, 12000)));
+
+            BlockDebrisCountMultiplier = cfg.Bind("GroundDebris", "BlockDebrisCountMultiplier", 1f,
+                new ConfigDescription("Multiplier for block debris particles from destroyed blocks.",
+                    new AcceptableValueRange<float>(0.1f, 5f)));
 
             // ── Sparks (Shrapnel Projectile Impacts) ──
             MetalImpactSparksMin = cfg.Bind("Sparks", "MetalImpactMin", 6,

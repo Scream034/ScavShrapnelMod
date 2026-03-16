@@ -11,6 +11,7 @@ namespace ScavShrapnelMod.Projectiles
     /// - Wind drift (increases with age as momentum fades)
     /// - Thermal lift (hot particles rise before settling)
     /// - Configurable gravity (negative = rises)
+    /// - Start delay for shockwave propagation simulation
     ///
     /// Performance optimizations:
     /// - Frame-staggered turbulence (every 3 frames, ×3 compensation)
@@ -35,6 +36,10 @@ namespace ScavShrapnelMod.Projectiles
         private float _perlinSeedX;
         private float _perlinSeedY;
         private float _rotationSpeed;
+
+        // WHY: Start delay simulates shockwave propagation — particles
+        // further from epicenter appear later, creating a wave-like effect.
+        private float _startDelay;
 
         // Cached components
         private SpriteRenderer _sr;
@@ -87,6 +92,29 @@ namespace ScavShrapnelMod.Projectiles
             float gravity, float drag, float turbulenceStrength, float turbulenceScale,
             Vector2 wind, float thermalLift, float perlinSeed)
         {
+            InitializeFullDelayed(velocity, lifetime, color, gravity, drag,
+                turbulenceStrength, turbulenceScale, wind, thermalLift, perlinSeed, 0f);
+        }
+
+        /// <summary>
+        /// Full initialization with start delay for shockwave propagation.
+        /// During delay, particle is invisible and motionless.
+        /// </summary>
+        /// <param name="velocity">Initial velocity vector (m/s).</param>
+        /// <param name="lifetime">Time to live (seconds).</param>
+        /// <param name="color">Base RGBA color.</param>
+        /// <param name="gravity">Gravity acceleration. Negative = rises.</param>
+        /// <param name="drag">Air resistance. 0=vacuum, 1=thick atmosphere.</param>
+        /// <param name="turbulenceStrength">Random air current amplitude.</param>
+        /// <param name="turbulenceScale">Spatial frequency of Perlin noise.</param>
+        /// <param name="wind">Constant wind vector. Applied increasingly with age.</param>
+        /// <param name="thermalLift">Upward thermal force. Decays over lifetime.</param>
+        /// <param name="perlinSeed">Unique seed for Perlin noise offset.</param>
+        /// <param name="startDelay">Seconds to wait before becoming visible and moving.</param>
+        public void InitializeFullDelayed(Vector2 velocity, float lifetime, Color color,
+            float gravity, float drag, float turbulenceStrength, float turbulenceScale,
+            Vector2 wind, float thermalLift, float perlinSeed, float startDelay)
+        {
             _velocity = velocity;
             _lifetime = lifetime;
             _maxLifetime = lifetime;
@@ -97,6 +125,7 @@ namespace ScavShrapnelMod.Projectiles
             _turbulenceScale = turbulenceScale;
             _wind = wind;
             _thermalLift = thermalLift;
+            _startDelay = startDelay;
 
             // WHY: Unique Perlin seeds prevent synchronized swarm movement
             _perlinSeedX = perlinSeed * 17.31f;
@@ -106,7 +135,19 @@ namespace ScavShrapnelMod.Projectiles
             // Cache components
             _transform = transform;
             _sr = GetComponent<SpriteRenderer>();
-            if (_sr != null) _sr.color = color;
+
+            if (_sr != null)
+            {
+                if (_startDelay > 0f)
+                {
+                    // WHY: Hide particle until delay expires
+                    _sr.enabled = false;
+                }
+                else
+                {
+                    _sr.color = color;
+                }
+            }
 
             // PERF: Distribute turbulence calculations across frames
             _frameSlot = Mathf.Abs(GetInstanceID()) % TurbulenceInterval;
@@ -114,6 +155,31 @@ namespace ScavShrapnelMod.Projectiles
 
         private void Update()
         {
+            // WHY: SpriteRenderer can be destroyed externally or fail to cache.
+            // Without this guard, every subsequent line using _sr would throw.
+            if (_sr == null)
+            {
+                Destroy(gameObject);
+                return;
+            }
+
+            // WHY: During start delay, particle is invisible and motionless.
+            // Simulates shockwave propagation — distant particles appear later.
+            if (_startDelay > 0f)
+            {
+                _startDelay -= Time.deltaTime;
+                if (_startDelay <= 0f)
+                {
+                    // Delay expired — make visible and start physics
+                    _sr.enabled = true;
+                    _sr.color = _baseColor;
+                }
+                else
+                {
+                    return;
+                }
+            }
+
             _lifetime -= Time.deltaTime;
             if (_lifetime <= 0f)
             {
@@ -125,10 +191,10 @@ namespace ScavShrapnelMod.Projectiles
             float t = _lifetime / _maxLifetime; // 1→0 over lifetime
             float age = 1f - t;                  // 0→1 over lifetime
 
-            //  Gravity 
+            //  Gravity
             _velocity.y -= _gravity * dt;
 
-            //  Quadratic air drag 
+            //  Quadratic air drag
             // WHY: F_drag ∝ v² is physically accurate for particles in air
             float speedSqr = _velocity.x * _velocity.x + _velocity.y * _velocity.y;
             if (speedSqr > 0.0001f)
@@ -149,7 +215,7 @@ namespace ScavShrapnelMod.Projectiles
                 }
             }
 
-            //  Wind drift (increases with age²) 
+            //  Wind drift (increases with age²)
             if (_wind.x != 0f || _wind.y != 0f)
             {
                 float windInfluence = age * age;
@@ -157,14 +223,14 @@ namespace ScavShrapnelMod.Projectiles
                 _velocity.y += _wind.y * windInfluence * dt;
             }
 
-            //  Thermal lift (decays with age) 
+            //  Thermal lift (decays with age)
             if (_thermalLift > 0f)
             {
                 float liftFactor = t * t;
                 _velocity.y += _thermalLift * liftFactor * dt;
             }
 
-            //  Perlin turbulence (frame-staggered) 
+            //  Perlin turbulence (frame-staggered)
             // PERF: Calculate every TurbulenceInterval frames, multiply effect by interval
             // Reduces Perlin calls by ~66% with minimal visual difference
             if (Time.frameCount % TurbulenceInterval == _frameSlot)
@@ -178,16 +244,16 @@ namespace ScavShrapnelMod.Projectiles
                 _velocity.y += py * turbMult * 0.5f;
             }
 
-            //  Apply movement 
+            //  Apply movement
             Vector3 pos = _transform.position;
             pos.x += _velocity.x * dt;
             pos.y += _velocity.y * dt;
             _transform.position = pos;
 
-            //  Visual rotation 
+            //  Visual rotation
             _transform.Rotate(0f, 0f, _rotationSpeed * dt);
 
-            //  Fade out (smoothstep) 
+            //  Fade out (smoothstep)
             float alpha = t * t * (3f - 2f * t);
             _sr.color = new Color(_baseColor.r, _baseColor.g, _baseColor.b, _baseColor.a * alpha);
         }

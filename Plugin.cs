@@ -23,7 +23,7 @@ namespace ScavShrapnelMod
     {
         public const string Guid = "ScavShrapnelMod";
         public const string Name = "ScavShrapnelMod";
-        public const string Version = "0.6.0";
+        public const string Version = "0.7.0";
 
         internal static BepInEx.Logging.ManualLogSource Log;
         internal static bool CommandsRegistered;

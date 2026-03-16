@@ -14,8 +14,8 @@ namespace ScavShrapnelMod.Logic
     /// - Stratified angular distribution (8 sectors, no clustering)
     /// - Weight distribution: 25% Hot, 15% pyrotechnic, 60% random
     /// - Biome-aware effects (desert dust, cold steam)
-    /// - Block debris from solid blocks in blast radius
-    /// - Bottom sector blocked for ground-placed mines
+    /// - Block debris from destroyed blocks (material-aware colors)
+    /// - Bottom cone blocked for ground-placed mines (sectors 5,6,7)
     /// - Advanced effects: smoke column, fire embers, crater dust
     ///
     /// Deterministic via System.Random with coordinate seed + mod version.
@@ -29,9 +29,17 @@ namespace ScavShrapnelMod.Logic
         public static float GlobalMaxSpeed => ShrapnelConfig.GlobalMaxSpeed.Value;
 
         private const int AngularSectors = 8;
-        private const int BottomSectorIndex = 5;
         private const float HotFraction = 0.25f;
         private const float PyrotechnicFraction = 0.15f;
+
+        // WHY: Mines on flat ground block 3 bottom sectors (5,6,7 = 225°-360°)
+        // giving a symmetric ~180° upward cone.
+        private const int BottomConeStartSector = 5;
+        private const int BottomConeSectorCount = 3; // sectors 5,6,7
+
+        // ── CONSTANTS ──
+        private const float BlockDebrisSpread = 0.3f;
+        private const float AshCloudSpread = 0.5f;
 
         private static int MakeSeed(Vector2 position)
         {
@@ -63,8 +71,6 @@ namespace ScavShrapnelMod.Logic
 
         /// <summary>
         /// Resets spawn throttle state. Call on scene/world load.
-        /// WHY: Prevents stale position/frame from previous session
-        /// blocking first explosion in new session.
         /// </summary>
         public static void ResetThrottle()
         {
@@ -100,13 +106,15 @@ namespace ScavShrapnelMod.Logic
                     visualCount = (int)(visualCount * 1.3f);
 
                 bool bottomBlocked = IsBottomBlocked(param.position);
-                int activeSectors = bottomBlocked ? (AngularSectors - 1) : AngularSectors;
+
+                int blockedCount = bottomBlocked ? BottomConeSectorCount : 0;
+                int activeSectors = AngularSectors - blockedCount;
 
                 int hotCount = Mathf.Max(activeSectors, Mathf.CeilToInt(count * HotFraction));
                 int pyroCount = Mathf.Max(1, Mathf.CeilToInt(count * PyrotechnicFraction));
                 int randomCount = Mathf.Max(0, count - hotCount - pyroCount);
 
-                // Phase 1: Hot shrapnel (stratified across sectors)
+                // Phase 1: Hot shrapnel (stratified)
                 int hotSpawned = 0;
                 try
                 {
@@ -116,21 +124,23 @@ namespace ScavShrapnelMod.Logic
                 catch (Exception e) { Plugin.Log.LogWarning($"[ShrapnelMod] Phase1 Hot: {e.Message}"); }
 
                 // Phase 2: Pyrotechnic visual shrapnel
+                int pyroSpawned = 0;
                 try
                 {
-                    SpawnPyrotechnic(param.position, speed, type, rng, pyroCount, bottomBlocked);
+                    pyroSpawned = SpawnPyrotechnic(param.position, speed, type, rng, pyroCount, bottomBlocked);
                 }
                 catch (Exception e) { Plugin.Log.LogWarning($"[ShrapnelMod] Phase2 Pyro: {e.Message}"); }
 
                 // Phase 3: Random weight shrapnel
+                int randomSpawned = 0;
                 try
                 {
-                    SpawnRandomWeight(param.position, speed, type, rng, randomCount,
+                    randomSpawned = SpawnRandomWeight(param.position, speed, type, rng, randomCount,
                         hotCount, bottomBlocked);
                 }
                 catch (Exception e) { Plugin.Log.LogWarning($"[ShrapnelMod] Phase3 Random: {e.Message}"); }
 
-                // Phase 4: Secondary shrapnel from destroyed blocks
+                // Phase 4: Secondary from blocks
                 int secondarySpawned = 0;
                 try
                 {
@@ -147,10 +157,14 @@ namespace ScavShrapnelMod.Logic
                 catch (Exception e) { Plugin.Log.LogWarning($"[ShrapnelMod] Phase5 BlockDebris: {e.Message}"); }
 
                 // Phase 6: Visual shrapnel (non-physics)
+                int visualSpawned = 0;
                 try
                 {
                     for (int i = 0; i < visualCount; i++)
+                    {
                         ShrapnelFactory.SpawnVisual(param.position, speed, type, rng);
+                        visualSpawned++;
+                    }
                 }
                 catch (Exception e) { Plugin.Log.LogWarning($"[ShrapnelMod] Phase6 Visual: {e.Message}"); }
 
@@ -177,19 +191,18 @@ namespace ScavShrapnelMod.Logic
                 }
                 catch (Exception e) { Plugin.Log.LogWarning($"[ShrapnelMod] Phase9 Biome: {e.Message}"); }
 
-                // Phase 10: Advanced effects (smoke column, fire embers, crater dust)
+                // Phase 10: Advanced effects (smoke, embers, crater dust)
                 try
                 {
                     ExplosionEffectsLogic.SpawnAllEffects(param.position, param.range,
                         param.structuralDamage, rng);
                 }
-                catch (Exception e) { Plugin.Log.LogWarning($"[ShrapnelMod] Phase10 AdvancedEffects: {e.Message}"); }
+                catch (Exception e) { Plugin.Log.LogWarning($"[ShrapnelMod] Phase10 Effects: {e.Message}"); }
 
-                // Log spawn counts for diagnostics
-                Debug.Log($"[ShrapnelMod] SPAWNED Hot:{hotSpawned} Pyro:{pyroCount} Rnd:{randomCount}" +
-                          $" V:{visualCount} S:{secondarySpawned} BlkD:{blockDebrisCount}" +
-                          $" A:{ashCount} Total:{hotSpawned + pyroCount + randomCount + secondarySpawned}" +
-                          $" Temp:{ambientTemp:F0}" +
+                Debug.Log($"[ShrapnelMod] SPAWNED Hot:{hotSpawned} Pyro:{pyroSpawned} Rnd:{randomSpawned}" +
+                          $" V:{visualSpawned} S:{secondarySpawned} BlkD:{blockDebrisCount}" +
+                          $" A:{ashCount} Total:{hotSpawned + pyroSpawned + randomSpawned + secondarySpawned}" +
+                          $" Temp:{ambientTemp:F0} Bottom:{bottomBlocked}" +
                           $" Phys:{DebrisTracker.PhysicalCount} Vis:{DebrisTracker.VisualCount}");
             }
             catch (Exception e)
@@ -198,23 +211,21 @@ namespace ScavShrapnelMod.Logic
             }
         }
 
-        // ══════════════════════════════════════════════════════════════════
-        //  BLOCK DEBRIS — particles from solid blocks destroyed by explosion
-        // ══════════════════════════════════════════════════════════════════
+        //  BLOCK DEBRIS — inert particles from destroyed blocks
 
         /// <summary>
         /// Spawns debris particles from solid blocks within blast radius.
-        /// Scales with explosion power (structuralDamage).
+        /// Uses material-aware colors via BlockClassifier.
+        /// LitMaterial — debris is inert, should be dark in dark areas.
         /// </summary>
         private static int SpawnBlockDebris(ExplosionParams param, System.Random rng)
         {
-            Material unlitMat = ShrapnelVisuals.UnlitMaterial;
-            if (unlitMat == null) return 0;
-
             if (param.structuralDamage < 500f) return 0;
 
             float powerFactor = Mathf.Clamp01(param.structuralDamage / 2000f);
-            int maxSamples = Mathf.RoundToInt(20 + powerFactor * 40);
+            float blockDebrisMult = ShrapnelConfig.BlockDebrisCountMultiplier.Value;
+
+            int maxSamples = Mathf.RoundToInt((20 + powerFactor * 40) * blockDebrisMult);
             int spawned = 0;
 
             for (int i = 0; i < maxSamples; i++)
@@ -234,9 +245,9 @@ namespace ScavShrapnelMod.Logic
                     int debrisPerBlock = rng.Range(3, 8);
                     for (int j = 0; j < debrisPerBlock; j++)
                     {
-                        SpawnSingleBlockDebris(samplePos, param.position, info, rng, unlitMat);
+                        SpawnSingleBlockDebris(samplePos, param.position, info, rng);
+                        spawned++;
                     }
-                    spawned += debrisPerBlock;
                 }
                 catch (IndexOutOfRangeException) { }
             }
@@ -245,19 +256,12 @@ namespace ScavShrapnelMod.Logic
         }
 
         private static void SpawnSingleBlockDebris(Vector2 blockWorldPos, Vector2 epicenter,
-            BlockInfo info, System.Random rng, Material mat)
+            BlockInfo info, System.Random rng)
         {
-            GameObject debris = new GameObject("BlkDebris");
-            debris.transform.position = blockWorldPos + rng.InsideUnitCircle() * 0.3f;
-            debris.transform.localScale = Vector3.one * rng.Range(0.05f, 0.18f);
+            Vector2 position = blockWorldPos + rng.InsideUnitCircle() * BlockDebrisSpread;
 
-            SpriteRenderer sr = debris.AddComponent<SpriteRenderer>();
-            sr.sprite = ShrapnelVisuals.GetTriangleSprite(
-                (ShrapnelVisuals.TriangleShape)rng.Next(0, 6));
-            sr.sharedMaterial = mat;
-            sr.sortingOrder = 11;
-
-            Color debrisColor = GetBlockDebrisColor(info, rng);
+            MaterialCategory cat = BlockClassifier.Classify(info);
+            Color debrisColor = BlockClassifier.GetColorWithAlpha(cat, rng, 0.85f);
 
             Vector2 awayDir = (blockWorldPos - epicenter).normalized;
             if (awayDir.sqrMagnitude < 0.01f)
@@ -266,75 +270,49 @@ namespace ScavShrapnelMod.Logic
             float spreadAngle = rng.Range(-45f, 45f) * Mathf.Deg2Rad;
             Vector2 finalDir = MathHelper.RotateDirection(awayDir, spreadAngle);
 
+            // WHY: Upward bias — debris doesn't fly straight down into ground
             finalDir.y = Mathf.Max(finalDir.y, 0.2f);
             finalDir.Normalize();
 
             float speed = rng.Range(4f, 12f);
             Vector2 velocity = finalDir * speed;
 
-            AshParticle ash = debris.AddComponent<AshParticle>();
-            ash.InitializeFull(
-                velocity,
-                rng.Range(1.5f, 4f),
+            var visual = new VisualParticleParams(
+                rng.Range(0.05f, 0.18f),
                 debrisColor,
+                11,
+                (ShrapnelVisuals.TriangleShape)rng.Next(0, 6));
+
+            var physics = new AshPhysicsParams(
+                velocity,
+                lifetime: rng.Range(1.5f, 4f),
                 gravity: rng.Range(0.8f, 1.5f),
                 drag: 0.3f,
                 turbulenceStrength: 0.4f,
                 turbulenceScale: 1.5f,
                 wind: new Vector2(rng.Range(-0.2f, 0.2f), 0f),
-                thermalLift: 0.2f,
-                perlinSeed: rng.Range(0f, 100f));
+                thermalLift: 0.2f);
 
-            DebrisTracker.RegisterVisual(debris);
+            // WHY: LitMaterial — inert debris is dark in dark areas
+            ParticleHelper.SpawnLit("BlkDebris", position, visual, physics,
+                rng.Range(0f, 100f));
         }
 
-        /// <summary>Zero-alloc string contains check.</summary>
-        private static bool ContainsIgnoreCase(string source, string value)
+        //  SECTOR BLOCKING
+
+        /// <summary>
+        /// Checks if a sector index is blocked when bottom is blocked.
+        /// Blocked sectors: 5,6,7 (225°-360°).
+        /// Active sectors: 0,1,2,3,4 (0°-225°).
+        /// </summary>
+        private static bool IsSectorBlocked(int sector, bool bottomBlocked)
         {
-            return source.IndexOf(value, StringComparison.OrdinalIgnoreCase) >= 0;
+            if (!bottomBlocked) return false;
+            return sector >= BottomConeStartSector
+                && sector < BottomConeStartSector + BottomConeSectorCount;
         }
 
-        private static Color GetBlockDebrisColor(BlockInfo info, System.Random rng)
-        {
-            if (info.metallic)
-            {
-                float gray = rng.Range(0.3f, 0.5f);
-                return new Color(gray, gray, gray, 0.9f);
-            }
-
-            string name = info.name ?? string.Empty;
-
-            if (ContainsIgnoreCase(name, "stone") || ContainsIgnoreCase(name, "rock"))
-            {
-                float g = rng.Range(0.4f, 0.6f);
-                return new Color(g, g * 0.95f, g * 0.9f, 0.85f);
-            }
-
-            if (ContainsIgnoreCase(name, "wood"))
-            {
-                return new Color(
-                    rng.Range(0.35f, 0.5f),
-                    rng.Range(0.2f, 0.35f),
-                    rng.Range(0.1f, 0.2f),
-                    0.9f);
-            }
-
-            if (ContainsIgnoreCase(name, "sand"))
-            {
-                return new Color(
-                    rng.Range(0.7f, 0.85f),
-                    rng.Range(0.6f, 0.7f),
-                    rng.Range(0.35f, 0.45f),
-                    0.8f);
-            }
-
-            float gray2 = rng.Range(0.35f, 0.55f);
-            return new Color(gray2, gray2, gray2, 0.85f);
-        }
-
-        // ══════════════════════════════════════════════════════════════════
         //  STRATIFIED SPAWNING
-        // ══════════════════════════════════════════════════════════════════
 
         private static int SpawnHotShrapnel(Vector2 epicenter, float speed,
             ShrapnelProjectile.ShrapnelType type, System.Random rng,
@@ -345,7 +323,7 @@ namespace ScavShrapnelMod.Logic
 
             for (int sector = 0; sector < AngularSectors; sector++)
             {
-                if (bottomBlocked && sector == BottomSectorIndex) continue;
+                if (IsSectorBlocked(sector, bottomBlocked)) continue;
 
                 int toSpawn = Mathf.Min(hotPerSector, hotCount - hotSpawned);
                 for (int j = 0; j < toSpawn; j++)
@@ -371,22 +349,26 @@ namespace ScavShrapnelMod.Logic
             return hotSpawned;
         }
 
-        private static void SpawnPyrotechnic(Vector2 epicenter, float speed,
+        private static int SpawnPyrotechnic(Vector2 epicenter, float speed,
             ShrapnelProjectile.ShrapnelType type, System.Random rng,
             int count, bool bottomBlocked)
         {
+            int spawned = 0;
             for (int i = 0; i < count; i++)
             {
                 int sector = GetRandomActiveSector(bottomBlocked, rng);
                 float angle = rng.AngleInSector(sector, AngularSectors);
                 ShrapnelFactory.SpawnVisual(epicenter, speed, type, rng, angle);
+                spawned++;
             }
+            return spawned;
         }
 
-        private static void SpawnRandomWeight(Vector2 epicenter, float speed,
+        private static int SpawnRandomWeight(Vector2 epicenter, float speed,
             ShrapnelProjectile.ShrapnelType type, System.Random rng,
             int count, int startIndex, bool bottomBlocked)
         {
+            int spawned = 0;
             for (int i = 0; i < count; i++)
             {
                 int sector = GetRandomActiveSector(bottomBlocked, rng);
@@ -395,33 +377,60 @@ namespace ScavShrapnelMod.Logic
                 Vector2 dir = MathHelper.AngleToDirection(angle);
                 ShrapnelFactory.SpawnDirectional(epicenter, speed, type,
                     weight, startIndex + i, rng, dir);
+                spawned++;
             }
+            return spawned;
         }
 
+        /// <summary>
+        /// Returns a random non-blocked sector index.
+        /// Active sectors when bottom blocked: 0,1,2,3,4.
+        /// </summary>
         private static int GetRandomActiveSector(bool bottomBlocked, System.Random rng)
         {
             if (!bottomBlocked)
                 return rng.Next(0, AngularSectors);
 
-            int sector = rng.Next(0, AngularSectors - 1);
-            if (sector >= BottomSectorIndex) sector++;
-            return sector;
+            // WHY: With 3 blocked sectors (5,6,7), active sectors are 0,1,2,3,4.
+            int activeSectors = AngularSectors - BottomConeSectorCount;
+            int slot = rng.Next(0, activeSectors);
+
+            int found = 0;
+            for (int s = 0; s < AngularSectors; s++)
+            {
+                if (IsSectorBlocked(s, true)) continue;
+                if (found == slot) return s;
+                found++;
+            }
+
+            return 0; // fallback
         }
 
+        /// <summary>
+        /// Checks if there is solid ground below explosion epicenter.
+        /// Scans 4 positions downward to handle mines placed 0.5-3 units above blocks.
+        /// </summary>
         private static bool IsBottomBlocked(Vector2 position)
         {
             try
             {
-                Vector2Int blockPos = WorldGeneration.world.WorldToBlockPos(
-                    position + Vector2.down * 0.5f);
-                return WorldGeneration.world.GetBlock(blockPos) != 0;
+                // WHY: Mines explode 0.5-3 units above the block they're placed on.
+                // Explosion position.y might be above block boundary, so we check
+                // 4 positions below at 0.3, 1.3, 2.3, 3.3 block offsets to reliably
+                // detect ground even if epicenter is floating above it.
+                for (int i = 0; i < 4; i++)
+                {
+                    Vector2Int blockPos = WorldGeneration.world.WorldToBlockPos(
+                        position + Vector2.down * (0.3f + i));
+                    if (WorldGeneration.world.GetBlock(blockPos) != 0)
+                        return true;
+                }
             }
-            catch { return false; }
+            catch { }
+            return false;
         }
 
-        // ══════════════════════════════════════════════════════════════════
         //  BIOME EFFECTS
-        // ══════════════════════════════════════════════════════════════════
 
         private static void SpawnBiomeEffects(Vector2 epicenter, float range,
             float temperature, System.Random rng, float spawnMult)
@@ -460,8 +469,8 @@ namespace ScavShrapnelMod.Logic
                     if (blockId == 0) continue;
 
                     BlockInfo info = WorldGeneration.world.GetBlockInfo(blockId);
-                    if (info?.name != null && ContainsIgnoreCase(info.name, "sand"))
-                        sandCount++;
+                    MaterialCategory cat = BlockClassifier.Classify(info);
+                    if (cat == MaterialCategory.Sand) sandCount++;
                 }
             }
             catch { }
@@ -488,7 +497,8 @@ namespace ScavShrapnelMod.Logic
                     ShrapnelVisuals.TriangleShape.Chunk);
                 var physics = AshPhysicsParams.DesertDust(vel, rng.Range(8f, 25f), rng);
 
-                ParticleHelper.SpawnAshParticle("DesertDust", position, visual, physics,
+                // WHY: LitMaterial — sand dust is inert, should be dark in dark areas
+                ParticleHelper.SpawnLit("DesertDust", position, visual, physics,
                     rng.Range(0f, 100f));
             }
         }
@@ -509,14 +519,13 @@ namespace ScavShrapnelMod.Logic
                     ShrapnelVisuals.TriangleShape.Chunk);
                 var physics = AshPhysicsParams.ColdSteam(vel, rng.Range(4f, 10f), rng);
 
-                ParticleHelper.SpawnAshParticle("ColdSteam", position, visual, physics,
+                // WHY: LitMaterial — water vapor is not self-luminous
+                ParticleHelper.SpawnLit("ColdSteam", position, visual, physics,
                     rng.Range(0f, 100f));
             }
         }
 
-        // ══════════════════════════════════════════════════════════════════
         //  HELPERS
-        // ══════════════════════════════════════════════════════════════════
 
         private static float GetAmbientTemperature()
         {
@@ -555,13 +564,13 @@ namespace ScavShrapnelMod.Logic
                     BlockInfo info = WorldGeneration.world.GetBlockInfo(blockId);
                     if (info == null) continue;
 
-                    string blockName = info.name ?? string.Empty;
+                    MaterialCategory cat = BlockClassifier.Classify(info);
 
-                    var secType = info.metallic
+                    var secType = (cat == MaterialCategory.Metal)
                         ? ShrapnelProjectile.ShrapnelType.HeavyMetal
-                        : (info.health < 100f && !ContainsIgnoreCase(blockName, "stone")
+                        : (info.health < 100f && cat != MaterialCategory.Rock && cat != MaterialCategory.Concrete)
                             ? ShrapnelProjectile.ShrapnelType.Wood
-                            : ShrapnelProjectile.ShrapnelType.Stone);
+                            : ShrapnelProjectile.ShrapnelType.Stone;
 
                     ShrapnelWeight weight = RollWeight(secType, i, maxSamples, rng);
                     ShrapnelFactory.Spawn(samplePos, primarySpeed * 0.4f, secType, weight, i, rng);

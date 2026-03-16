@@ -358,7 +358,6 @@ namespace ScavShrapnelMod.Projectiles
                 // WHY: Shrapnel is outside world bounds.
                 // For Debris/Stuck this means the block was destroyed and
                 // shrapnel is falling into void. Safe to destroy.
-                // But DON'T destroy Flying shrapnel here — let lifeTimer handle it.
                 if (state == State.Stuck || state == State.Debris)
                     Destroy(gameObject);
             }
@@ -611,8 +610,8 @@ namespace ScavShrapnelMod.Projectiles
 
         /// <summary>
         /// Spawns sparks on metal impact or ricochet.
-        /// WHY: Now uses instance System.Random instead of UnityEngine.Random
-        /// for multiplayer determinism. All sparks registered in DebrisTracker.
+        /// WHY: Migrated to ParticleHelper for consistent material selection
+        /// and future pooling support. Uses SpawnSparkUnlit — sparks are self-luminous.
         /// </summary>
         private void SpawnSparks(Vector2 pos, Vector2 normal, bool isRicochet)
         {
@@ -630,52 +629,48 @@ namespace ScavShrapnelMod.Projectiles
 
             int sparkCount = _rng.Range(minSparks, maxSparks);
 
+            Vector2 baseDir = isRicochet
+                ? Vector2.Reflect(-rb.velocity.normalized, normal)
+                : normal;
+
             for (int i = 0; i < sparkCount; i++)
             {
-                GameObject spark = new GameObject("Spark");
-                spark.transform.position = pos + _rng.InsideUnitCircle() * 0.1f;
-                spark.transform.localScale = Vector3.one * _rng.Range(0.02f, 0.06f);
-
-                SpriteRenderer ssr = spark.AddComponent<SpriteRenderer>();
-                ssr.sprite = ShrapnelVisuals.GetTriangleSprite(ShrapnelVisuals.TriangleShape.Needle);
-                ssr.sharedMaterial = ShrapnelVisuals.LitMaterial;
+                Vector2 sparkPos = pos + _rng.InsideUnitCircle() * 0.1f;
 
                 float colorVar = _rng.NextFloat();
-                ssr.color = new Color(
+                Color sparkColor = new Color(
                     1f,
                     Mathf.Lerp(0.5f, 0.95f, colorVar),
                     Mathf.Lerp(0.1f, 0.5f, colorVar));
-                ssr.sortingOrder = 11;
 
-                ShrapnelFactory.MPB.Clear();
-                ShrapnelFactory.MPB.SetColor(ShrapnelFactory.EmissionColorId,
+                var visual = new VisualParticleParams(
+                    _rng.Range(0.02f, 0.06f),
+                    sparkColor, 11,
+                    ShrapnelVisuals.TriangleShape.Needle);
+
+                var emission = new EmissionParams(
                     new Color(3f, Mathf.Lerp(1.5f, 2.5f, colorVar), 0.5f));
-                ssr.SetPropertyBlock(ShrapnelFactory.MPB);
 
                 float spreadAngle = _rng.Range(-60f, 60f) * Mathf.Deg2Rad;
-                Vector2 baseDir = isRicochet ? Vector2.Reflect(-rb.velocity.normalized, normal) : normal;
                 Vector2 sparkDir = MathHelper.RotateDirection(baseDir, spreadAngle);
 
-                float sparkSpeed = _rng.Range(3f, 10f);
-                float sparkLife = _rng.Range(0.08f, 0.25f);
+                var spark = new SparkParams(
+                    sparkDir,
+                    _rng.Range(3f, 10f),
+                    _rng.Range(0.08f, 0.25f));
 
-                var visual = spark.AddComponent<VisualShrapnel>();
-                visual.Initialize(sparkDir, sparkSpeed, sparkLife);
-
-                // WHY: Previously untracked — sparks were invisible to DebrisTracker,
-                // bypassing eviction cap and causing potential memory leaks.
-                DebrisTracker.RegisterVisual(spark);
+                // WHY: Sparks are self-luminous — always visible in dark
+                ParticleHelper.SpawnSparkUnlit("Spark", sparkPos, visual, spark, emission);
             }
 
             if (isRicochet)
-            {
                 SpawnRicochetDebris(pos, normal);
-            }
         }
 
         /// <summary>
         /// Spawns metal debris particles on ricochet.
-        /// WHY: Now uses instance System.Random for determinism.
+        /// WHY: Migrated to ParticleHelper.SpawnLit — ricochet debris is inert,
+        /// should be dark in dark areas.
         /// </summary>
         private void SpawnRicochetDebris(Vector2 pos, Vector2 normal)
         {
@@ -683,33 +678,33 @@ namespace ScavShrapnelMod.Projectiles
             int maxDebris = ShrapnelConfig.RicochetDebrisMax.Value;
             int debrisCount = _rng.Range(minDebris, maxDebris);
 
-            Material unlitMat = ShrapnelVisuals.UnlitMaterial;
-            if (unlitMat == null) return;
-
             for (int i = 0; i < debrisCount; i++)
             {
-                GameObject debris = new GameObject("RicochetDebris");
-                debris.transform.position = pos + _rng.InsideUnitCircle() * 0.08f;
-                debris.transform.localScale = Vector3.one * _rng.Range(0.03f, 0.08f);
-
-                SpriteRenderer dsr = debris.AddComponent<SpriteRenderer>();
-                dsr.sprite = ShrapnelVisuals.GetTriangleSprite(ShrapnelVisuals.TriangleShape.Chunk);
-                dsr.sharedMaterial = unlitMat;
-                dsr.sortingOrder = 10;
+                Vector2 debrisPos = pos + _rng.InsideUnitCircle() * 0.08f;
 
                 float gray = _rng.Range(0.3f, 0.5f);
                 Color debrisColor = new Color(gray, gray, gray, 0.9f);
 
+                var visual = new VisualParticleParams(
+                    _rng.Range(0.03f, 0.08f),
+                    debrisColor, 10,
+                    ShrapnelVisuals.TriangleShape.Chunk);
+
                 float angle = _rng.Range(-70f, 70f) * Mathf.Deg2Rad;
                 Vector2 debrisDir = MathHelper.RotateDirection(normal, angle);
-
                 Vector2 velocity = debrisDir * _rng.Range(2f, 6f);
 
-                AshParticle ash = debris.AddComponent<AshParticle>();
-                ash.Initialize(velocity, _rng.Range(0.3f, 0.8f), debrisColor,
-                    _rng.Range(0f, 6.28f), 1.2f);
+                var physics = new AshPhysicsParams(
+                    velocity,
+                    _rng.Range(0.3f, 0.8f),
+                    gravity: 1.2f,
+                    drag: 0.3f,
+                    turbulenceStrength: 0.2f,
+                    turbulenceScale: 1f);
 
-                DebrisTracker.RegisterVisual(debris);
+                // WHY: Ricochet debris is inert — dark in dark areas
+                ParticleHelper.SpawnLit("RicoDebris", debrisPos, visual, physics,
+                    _rng.Range(0f, 100f));
             }
         }
 
@@ -926,7 +921,6 @@ namespace ScavShrapnelMod.Projectiles
             float decayMult = DamageDecayMultiplier;
 
             // WHY: Use instance _rng instead of allocating new System.Random per trigger.
-            // Previous code created new System.Random on every OnTriggerEnter2D.
             target.skinHealth -= _rng.Range(15f, 35f) * decayMult / armor;
             target.muscleHealth -= _rng.Range(5f, 15f) * decayMult / armor;
             target.bleedAmount += _rng.Range(3f, 12f) * decayMult / armor;
@@ -1015,30 +1009,41 @@ namespace ScavShrapnelMod.Projectiles
             }
         }
 
+        /// <summary>
+        /// Spawns steam puff when hot shrapnel enters water.
+        /// WHY: Migrated to ParticleHelper.SpawnUnlit — steam is
+        /// white vapor, uses Unlit for visibility in dark water.
+        /// </summary>
         private void SpawnSteamPuff()
         {
-            // WHY: Use instance _rng instead of allocating new System.Random
             int count = _rng.Range(3, 6);
             for (int i = 0; i < count; i++)
             {
-                GameObject steam = new GameObject("Steam");
-                steam.transform.position = _transform.position;
-                steam.transform.localScale = Vector3.one * _rng.Range(0.03f, 0.07f);
-
-                SpriteRenderer ssr = steam.AddComponent<SpriteRenderer>();
-                ssr.sprite = ShrapnelVisuals.GetTriangleSprite(ShrapnelVisuals.TriangleShape.Chunk);
-                ssr.sharedMaterial = ShrapnelVisuals.UnlitMaterial;
-                ssr.sortingOrder = 12;
+                Vector2 pos = (Vector2)_transform.position;
 
                 float gray = _rng.Range(0.8f, 1f);
                 Color steamColor = new Color(gray, gray, gray, 0.5f);
 
-                Vector2 velocity = new Vector2(_rng.Range(-0.3f, 0.3f), _rng.Range(1f, 2.5f));
+                var visual = new VisualParticleParams(
+                    _rng.Range(0.03f, 0.07f),
+                    steamColor, 12,
+                    ShrapnelVisuals.TriangleShape.Chunk);
 
-                AshParticle ash = steam.AddComponent<AshParticle>();
-                ash.Initialize(velocity, _rng.Range(0.5f, 1.2f), steamColor, _rng.Range(0f, 6.28f));
+                Vector2 velocity = new Vector2(
+                    _rng.Range(-0.3f, 0.3f),
+                    _rng.Range(1f, 2.5f));
 
-                DebrisTracker.RegisterVisual(steam);
+                var physics = new AshPhysicsParams(
+                    velocity,
+                    _rng.Range(0.5f, 1.2f),
+                    gravity: -0.1f,
+                    drag: 0.5f,
+                    turbulenceStrength: 0.8f,
+                    turbulenceScale: 2f);
+
+                // WHY: Steam is white vapor — Unlit for visibility in dark caves/water
+                ParticleHelper.SpawnUnlit("Steam", pos, visual, physics,
+                    _rng.Range(0f, 100f));
             }
         }
 
@@ -1046,10 +1051,8 @@ namespace ScavShrapnelMod.Projectiles
         {
             if (Heat > 0.01f)
             {
-                ShrapnelFactory.MPB.Clear();
-                ShrapnelFactory.MPB.SetColor(ShrapnelFactory.EmissionColorId,
+                ParticleHelper.ApplyEmission(sr,
                     ShrapnelVisuals.GetHotColor() * Heat * 1.3f);
-                sr.SetPropertyBlock(ShrapnelFactory.MPB);
             }
             else
             {
@@ -1066,7 +1069,7 @@ namespace ScavShrapnelMod.Projectiles
 
         private void ClearEmission()
         {
-            sr.SetPropertyBlock(null);
+            ParticleHelper.ClearEmission(sr);
             lastEmissionHeat = 0f;
         }
     }

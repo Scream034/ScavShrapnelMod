@@ -8,8 +8,12 @@ namespace ScavShrapnelMod
     //  ПАТЧИ ВЗРЫВОВ — чистый Harmony, никакой бизнес-логики
 
     /// <summary>
-    /// Перехватывает ВСЕ вызовы WorldGeneration.CreateExplosion
-    /// и спавнит осколки ДО оригинального взрыва (Prefix).
+    /// Intercepts ALL calls to WorldGeneration.CreateExplosion.
+    /// Spawns shrapnel BEFORE original explosion (Prefix).
+    ///
+    /// WHY: Using Prefix ensures shrapnel spawn uses the block layout
+    /// BEFORE the explosion destroys blocks. This prevents shrapnel
+    /// from spawning inside newly-created holes.
     /// </summary>
     [HarmonyPatch(typeof(WorldGeneration), nameof(WorldGeneration.CreateExplosion))]
     public static class CreateExplosionPatch
@@ -17,8 +21,12 @@ namespace ScavShrapnelMod
         [HarmonyPrefix]
         public static bool Prefix(ExplosionParams param)
         {
+            // WHY: CustomCreateExplosion already called TrySpawnFromExplosion.
+            // The throttle in TryRegisterSpawn will block the duplicate call.
+            // But we still call it here for explosions NOT routed through Custom
+            // (e.g. other mods or vanilla code calling CreateExplosion directly).
             ShrapnelSpawnLogic.TrySpawnFromExplosion(param);
-            return true; // true = оригинальный метод тоже выполняется
+            return true;
         }
     }
 

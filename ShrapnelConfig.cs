@@ -3,67 +3,89 @@ using BepInEx.Configuration;
 namespace ScavShrapnelMod
 {
     /// <summary>
-    /// Централизованная конфигурация мода через BepInEx ConfigFile.
-    /// 
-    /// Все параметры доступны в файле BepInEx/config/ScavShrapnelMod.cfg.
-    /// Изменения применяются при перезапуске игры.
-    /// 
-    /// Секции:
-    /// - Performance: лимиты, throttle, lifetime
-    /// - Bullets: осколки от пуль
-    /// - Explosions: классификация взрывов
-    /// - Visuals: эффекты, trails, пепел
-    /// - Damage: урон, кровотечение, переломы
-    /// - GroundDebris: частицы грунта
+    /// Centralized mod configuration via BepInEx ConfigFile.
+    ///
+    /// All parameters available in BepInEx/config/ScavShrapnelMod.cfg.
+    /// Changes apply on game restart.
+    ///
+    /// Sections:
+    /// - Performance: limits, throttle, lifetime
+    /// - Bullets: bullet shrapnel and impact effects
+    /// - Explosions: explosion classification
+    /// - Effects.Explosion: smoke, embers, crater dust
+    /// - Effects.BulletImpact: sparks, flash, metal chips
+    /// - Lifetime: debris/stuck duration
+    /// - Interact: player interaction
     /// </summary>
     public static class ShrapnelConfig
     {
-        // ── Performance ──
+        // ══════════════════════════════════════════════════════════════════
+        //  PERFORMANCE
+        // ══════════════════════════════════════════════════════════════════
 
-        /// <summary>Максимум живых debris-объектов в мире. Старые удаляются первыми.</summary>
+        /// <summary>Max alive physical shrapnel (ShrapnelProjectile) objects.</summary>
         public static ConfigEntry<int> MaxAliveDebris;
 
-        /// <summary>Глобальный множитель количества спавнов (0.1 = 10%, 2.0 = 200%).</summary>
+        /// <summary>Max alive visual particles (AshParticle, VisualShrapnel, etc.).</summary>
+        public static ConfigEntry<int> MaxAliveVisualParticles;
+
+        /// <summary>Global spawn count multiplier (0.1 = 10%, 2.0 = 200%).</summary>
         public static ConfigEntry<float> SpawnCountMultiplier;
 
-        /// <summary>Максимальная скорость любого осколка (м/с).</summary>
+        /// <summary>Max speed of any shrapnel (m/s).</summary>
         public static ConfigEntry<float> GlobalMaxSpeed;
 
-        /// <summary>Множитель скорости для всех осколков.</summary>
+        /// <summary>Speed multiplier for all shrapnel.</summary>
         public static ConfigEntry<float> GlobalSpeedBoost;
 
-        /// <summary>Минимальная дистанция между спавнами одного кадра (м).</summary>
+        /// <summary>Min distance between spawns in same frame (m).</summary>
         public static ConfigEntry<float> MinDistanceBetweenSpawns;
 
-        /// <summary>Макс DamageBlock-вызовов за кадр.</summary>
+        /// <summary>Max DamageBlock calls per frame.</summary>
         public static ConfigEntry<int> MaxDamagePerFrame;
 
-        /// <summary>Включить Debug.Log для каждого взрыва.</summary>
+        /// <summary>Enable Debug.Log for each explosion.</summary>
         public static ConfigEntry<bool> DebugLogging;
 
-        // ── Bullets ──
+        // ══════════════════════════════════════════════════════════════════
+        //  BULLETS
+        // ══════════════════════════════════════════════════════════════════
 
-        /// <summary>Минимальный интервал между спавнами осколков от пуль (кадры).</summary>
+        /// <summary>Enable physical shrapnel fragments from bullet impacts.</summary>
+        public static ConfigEntry<bool> EnableBulletFragments;
+
+        /// <summary>Enable visual impact effects (flash, sparks, chips).</summary>
+        public static ConfigEntry<bool> EnableBulletImpactEffects;
+
+        /// <summary>Min frames between bullet shrapnel spawns.</summary>
         public static ConfigEntry<int> BulletMinFramesBetweenSpawns;
 
-        /// <summary>Количество осколков от пули: min.</summary>
+        /// <summary>Min fragments from bullet.</summary>
         public static ConfigEntry<int> BulletFragmentsMin;
 
-        /// <summary>Количество осколков от пули: max (exclusive).</summary>
+        /// <summary>Max fragments from bullet (exclusive).</summary>
         public static ConfigEntry<int> BulletFragmentsMax;
 
-        /// <summary>Базовая скорость осколков от пуль (м/с).</summary>
+        /// <summary>Base speed for bullet fragments (m/s).</summary>
         public static ConfigEntry<float> BulletBaseSpeed;
 
-        /// <summary>Количество искр от пули: min.</summary>
+        /// <summary>Min sparks from bullet (legacy, use ImpactStreakSparks instead).</summary>
         public static ConfigEntry<int> BulletSparksMin;
 
-        /// <summary>Количество искр от пули: max (exclusive).</summary>
+        /// <summary>Max sparks from bullet (legacy, use ImpactStreakSparks instead).</summary>
         public static ConfigEntry<int> BulletSparksMax;
 
-        // ── Explosions: классификация ──
+        /// <summary>Scale multiplier for bullet shrapnel.</summary>
+        public static ConfigEntry<float> BulletScaleMultiplier;
 
-        /// <summary>Допуск сравнения параметров взрыва (±epsilon).</summary>
+        /// <summary>Heat multiplier for bullet shrapnel.</summary>
+        public static ConfigEntry<float> BulletHeatMultiplier;
+
+        // ══════════════════════════════════════════════════════════════════
+        //  EXPLOSIONS: CLASSIFICATION
+        // ══════════════════════════════════════════════════════════════════
+
+        /// <summary>Tolerance for explosion parameter comparison (+/- epsilon).</summary>
         public static ConfigEntry<float> ClassifyEpsilon;
 
         // ── Dynamite ──
@@ -91,142 +113,361 @@ namespace ScavShrapnelMod
         public static ConfigEntry<int> MineVisualMin;
         public static ConfigEntry<int> MineVisualMax;
 
-        // ── Visuals ──
+        // ══════════════════════════════════════════════════════════════════
+        //  GROUND DEBRIS
+        // ══════════════════════════════════════════════════════════════════
 
-        /// <summary>Множитель масштаба осколков от пуль (относительно взрывных).</summary>
-        public static ConfigEntry<float> BulletScaleMultiplier;
+        /// <summary>Multiplier for ground debris scan radius relative to explosion range.</summary>
+        public static ConfigEntry<float> GroundDebrisRangeMultiplier;
 
-        /// <summary>Множитель нагрева осколков от пуль.</summary>
-        public static ConfigEntry<float> BulletHeatMultiplier;
+        /// <summary>Multiplier for ground debris particle count.</summary>
+        public static ConfigEntry<float> GroundDebrisCountMultiplier;
 
-        // ── Debris lifetime ──
+        // ══════════════════════════════════════════════════════════════════
+        //  SPARKS (SHRAPNEL PROJECTILE IMPACTS)
+        // ══════════════════════════════════════════════════════════════════
 
-        /// <summary>Время жизни Metal debris (сек).</summary>
+        /// <summary>Min sparks on metal impact.</summary>
+        public static ConfigEntry<int> MetalImpactSparksMin;
+
+        /// <summary>Max sparks on metal impact (exclusive).</summary>
+        public static ConfigEntry<int> MetalImpactSparksMax;
+
+        /// <summary>Min sparks on ricochet.</summary>
+        public static ConfigEntry<int> RicochetSparksMin;
+
+        /// <summary>Max sparks on ricochet (exclusive).</summary>
+        public static ConfigEntry<int> RicochetSparksMax;
+
+        /// <summary>Min debris particles on ricochet.</summary>
+        public static ConfigEntry<int> RicochetDebrisMin;
+
+        /// <summary>Max debris particles on ricochet (exclusive).</summary>
+        public static ConfigEntry<int> RicochetDebrisMax;
+
+        // ══════════════════════════════════════════════════════════════════
+        //  ADVANCED EXPLOSION EFFECTS
+        // ══════════════════════════════════════════════════════════════════
+
+        /// <summary>Enable smoke column effect.</summary>
+        public static ConfigEntry<bool> EnableSmokeColumn;
+
+        /// <summary>Enable fire embers effect.</summary>
+        public static ConfigEntry<bool> EnableFireEmbers;
+
+        /// <summary>Enable crater dust effect.</summary>
+        public static ConfigEntry<bool> EnableCraterDust;
+
+        /// <summary>Smoke column particle count multiplier.</summary>
+        public static ConfigEntry<float> SmokeColumnCountMultiplier;
+
+        /// <summary>Smoke column lifetime multiplier.</summary>
+        public static ConfigEntry<float> SmokeColumnLifetimeMultiplier;
+
+        /// <summary>Fire embers count multiplier.</summary>
+        public static ConfigEntry<float> FireEmbersCountMultiplier;
+
+        /// <summary>Crater dust count multiplier.</summary>
+        public static ConfigEntry<float> CraterDustCountMultiplier;
+
+        /// <summary>Crater dust lifetime multiplier.</summary>
+        public static ConfigEntry<float> CraterDustLifetimeMultiplier;
+
+        // ══════════════════════════════════════════════════════════════════
+        //  ENHANCED BULLET IMPACT EFFECTS
+        // ══════════════════════════════════════════════════════════════════
+
+        /// <summary>Min streak sparks on regular impact.</summary>
+        public static ConfigEntry<int> ImpactStreakSparksMin;
+
+        /// <summary>Max streak sparks on regular impact.</summary>
+        public static ConfigEntry<int> ImpactStreakSparksMax;
+
+        /// <summary>Min streak sparks on ricochet.</summary>
+        public static ConfigEntry<int> RicochetStreakSparksMin;
+
+        /// <summary>Max streak sparks on ricochet.</summary>
+        public static ConfigEntry<int> RicochetStreakSparksMax;
+
+        /// <summary>Min floating sparks on impact.</summary>
+        public static ConfigEntry<int> ImpactFloatSparksMin;
+
+        /// <summary>Max floating sparks on impact.</summary>
+        public static ConfigEntry<int> ImpactFloatSparksMax;
+
+        /// <summary>Min metal chips on impact.</summary>
+        public static ConfigEntry<int> ImpactMetalChipsMin;
+
+        /// <summary>Max metal chips on impact.</summary>
+        public static ConfigEntry<int> ImpactMetalChipsMax;
+
+        // ══════════════════════════════════════════════════════════════════
+        //  DEBRIS LIFETIME
+        // ══════════════════════════════════════════════════════════════════
+
+        /// <summary>Metal debris lifetime (sec).</summary>
         public static ConfigEntry<float> DebrisLifetimeMetal;
 
-        /// <summary>Время жизни HeavyMetal debris (сек).</summary>
+        /// <summary>HeavyMetal debris lifetime (sec).</summary>
         public static ConfigEntry<float> DebrisLifetimeHeavyMetal;
 
-        /// <summary>Время жизни Stone debris (сек).</summary>
+        /// <summary>Stone debris lifetime (sec).</summary>
         public static ConfigEntry<float> DebrisLifetimeStone;
 
-        /// <summary>Время жизни Wood debris (сек).</summary>
+        /// <summary>Wood debris lifetime (sec).</summary>
         public static ConfigEntry<float> DebrisLifetimeWood;
 
-        /// <summary>Время жизни Electronic debris (сек).</summary>
+        /// <summary>Electronic debris lifetime (sec).</summary>
         public static ConfigEntry<float> DebrisLifetimeElectronic;
 
-        /// <summary>Время жизни Stuck осколка (сек).</summary>
+        /// <summary>Stuck shrapnel lifetime (sec).</summary>
         public static ConfigEntry<float> StuckLifetime;
 
-        // ── Interact ──
+        // ══════════════════════════════════════════════════════════════════
+        //  INTERACT
+        // ══════════════════════════════════════════════════════════════════
 
-        /// <summary>Максимальная дистанция для уничтожения кликом (тайлы).</summary>
+        /// <summary>Max distance to destroy debris by clicking (tiles).</summary>
         public static ConfigEntry<float> MaxInteractDistance;
 
+        // ══════════════════════════════════════════════════════════════════
+        //  BIND METHOD
+        // ══════════════════════════════════════════════════════════════════
+
         /// <summary>
-        /// Инициализирует все конфиг-записи. Вызывать из Plugin.Awake().
+        /// Initializes all config entries. Call from Plugin.Awake().
         /// </summary>
         public static void Bind(ConfigFile cfg)
         {
             // ── Performance ──
-            MaxAliveDebris = cfg.Bind("Performance", "MaxAliveDebris", 800,
-                new ConfigDescription("Максимум живых debris в мире. Старые удаляются первыми.",
-                    new AcceptableValueRange<int>(100, 5000)));
+            MaxAliveDebris = cfg.Bind("Performance", "MaxAliveDebris", 500,
+                new ConfigDescription("Max alive physical shrapnel objects. Oldest removed first.",
+                    new AcceptableValueRange<int>(50, 2000)));
+
+            MaxAliveVisualParticles = cfg.Bind("Performance", "MaxAliveVisualParticles", 3000,
+                new ConfigDescription("Max alive visual particles (ash, dust, sparks). Oldest removed first.",
+                    new AcceptableValueRange<int>(500, 10000)));
 
             SpawnCountMultiplier = cfg.Bind("Performance", "SpawnCountMultiplier", 1f,
-                new ConfigDescription("Множитель количества спавнов (0.1–3.0).",
+                new ConfigDescription("Global spawn count multiplier (0.1-3.0).",
                     new AcceptableValueRange<float>(0.1f, 3f)));
 
-            GlobalMaxSpeed = cfg.Bind("Performance", "GlobalMaxSpeed", 128f,
-                new ConfigDescription("Макс скорость осколка (м/с).",
+            GlobalMaxSpeed = cfg.Bind("Performance", "GlobalMaxSpeed", 140f,
+                new ConfigDescription("Max shrapnel speed (m/s).",
                     new AcceptableValueRange<float>(30f, 500f)));
 
-            GlobalSpeedBoost = cfg.Bind("Performance", "GlobalSpeedBoost", 1.5f,
-                new ConfigDescription("Множитель скорости всех осколков.",
+            GlobalSpeedBoost = cfg.Bind("Performance", "GlobalSpeedBoost", 1.8f,
+                new ConfigDescription("Speed multiplier for all shrapnel.",
                     new AcceptableValueRange<float>(0.5f, 5f)));
 
             MinDistanceBetweenSpawns = cfg.Bind("Performance", "MinDistanceBetweenSpawns", 1.5f,
-                "Минимальная дистанция между спавнами (м).");
+                "Min distance between spawns in same frame (m).");
 
             MaxDamagePerFrame = cfg.Bind("Performance", "MaxDamagePerFrame", 5,
-                new ConfigDescription("Макс DamageBlock вызовов за кадр.",
+                new ConfigDescription("Max DamageBlock calls per frame.",
                     new AcceptableValueRange<int>(1, 20)));
 
             DebugLogging = cfg.Bind("Performance", "DebugLogging", false,
-                "Включить Debug.Log для каждого взрыва.");
+                "Enable Debug.Log for each explosion.");
 
             // ── Bullets ──
-            BulletMinFramesBetweenSpawns = cfg.Bind("Bullets", "MinFramesBetweenSpawns", 3,
-                new ConfigDescription("Мин. кадров между спавнами осколков от пуль.",
-                    new AcceptableValueRange<int>(1, 30)));
+            EnableBulletFragments = cfg.Bind("Bullets", "EnableFragments", true,
+                "Enable physical shrapnel fragments from bullet impacts on metal.");
+
+            EnableBulletImpactEffects = cfg.Bind("Bullets", "EnableImpactEffects", true,
+                "Enable visual impact effects (flash, sparks, metal chips) on metal.");
+
+            BulletMinFramesBetweenSpawns = cfg.Bind("Bullets", "MinFramesBetweenSpawns", 1,
+                new ConfigDescription("Min frames between bullet shrapnel spawns. Lower = more responsive.",
+                    new AcceptableValueRange<int>(0, 30)));
 
             BulletFragmentsMin = cfg.Bind("Bullets", "FragmentsMin", 1,
-                new ConfigDescription("Мин. осколков от пули.",
+                new ConfigDescription("Min fragments from bullet impact.",
                     new AcceptableValueRange<int>(0, 10)));
 
-            BulletFragmentsMax = cfg.Bind("Bullets", "FragmentsMax", 4,
-                new ConfigDescription("Макс. осколков от пули (exclusive).",
+            BulletFragmentsMax = cfg.Bind("Bullets", "FragmentsMax", 3,
+                new ConfigDescription("Max fragments from bullet impact (exclusive).",
                     new AcceptableValueRange<int>(1, 15)));
 
             BulletBaseSpeed = cfg.Bind("Bullets", "BaseSpeed", 25f,
-                "Базовая скорость осколков от пуль (м/с).");
+                "Base speed for bullet fragments (m/s).");
 
-            BulletSparksMin = cfg.Bind("Bullets", "SparksMin", 4,
-                new ConfigDescription("Мин. искр от пули.",
-                    new AcceptableValueRange<int>(0, 20)));
+            BulletSparksMin = cfg.Bind("Bullets", "SparksMin", 8,
+                new ConfigDescription("(Legacy) Min sparks from bullet impact.",
+                    new AcceptableValueRange<int>(0, 30)));
 
-            BulletSparksMax = cfg.Bind("Bullets", "SparksMax", 8,
-                new ConfigDescription("Макс. искр от пули (exclusive).",
-                    new AcceptableValueRange<int>(1, 30)));
+            BulletSparksMax = cfg.Bind("Bullets", "SparksMax", 16,
+                new ConfigDescription("(Legacy) Max sparks from bullet impact (exclusive).",
+                    new AcceptableValueRange<int>(1, 40)));
 
             BulletScaleMultiplier = cfg.Bind("Bullets", "ScaleMultiplier", 0.72f,
-                "Множитель масштаба осколков от пуль.");
+                "Scale multiplier for bullet shrapnel.");
 
             BulletHeatMultiplier = cfg.Bind("Bullets", "HeatMultiplier", 0.5f,
-                "Множитель нагрева осколков от пуль.");
+                "Heat multiplier for bullet shrapnel.");
 
-            // ── Explosions ──
+            // ── Explosions Classification ──
             ClassifyEpsilon = cfg.Bind("Explosions", "ClassifyEpsilon", 0.5f,
-                "Допуск сравнения параметров взрыва для классификации.");
+                "Tolerance for explosion parameter comparison.");
 
+            // Dynamite
             DynamiteRange = cfg.Bind("Explosions.Dynamite", "Range", 18f,
-                "Ожидаемый range динамита для классификации.");
+                "Expected dynamite range for classification.");
             DynamiteStructuralDamage = cfg.Bind("Explosions.Dynamite", "StructuralDamage", 2000f,
-                "Ожидаемый structuralDamage динамита.");
-            DynamitePrimaryMin = cfg.Bind("Explosions.Dynamite", "PrimaryMin", 12, "");
-            DynamitePrimaryMax = cfg.Bind("Explosions.Dynamite", "PrimaryMax", 21, "");
-            DynamiteSpeed = cfg.Bind("Explosions.Dynamite", "Speed", 35f, "Базовая скорость (м/с).");
-            DynamiteVisualMin = cfg.Bind("Explosions.Dynamite", "VisualMin", 150, "");
-            DynamiteVisualMax = cfg.Bind("Explosions.Dynamite", "VisualMax", 226, "");
+                "Expected dynamite structuralDamage.");
+            DynamitePrimaryMin = cfg.Bind("Explosions.Dynamite", "PrimaryMin", 35,
+                "Min primary shrapnel count.");
+            DynamitePrimaryMax = cfg.Bind("Explosions.Dynamite", "PrimaryMax", 60,
+                "Max primary shrapnel count (exclusive).");
+            DynamiteSpeed = cfg.Bind("Explosions.Dynamite", "Speed", 40f,
+                "Base speed (m/s).");
+            DynamiteVisualMin = cfg.Bind("Explosions.Dynamite", "VisualMin", 350,
+                "Min visual shrapnel count.");
+            DynamiteVisualMax = cfg.Bind("Explosions.Dynamite", "VisualMax", 500,
+                "Max visual shrapnel count (exclusive).");
 
-            TurretRange = cfg.Bind("Explosions.Turret", "Range", 9f, "");
-            TurretVelocity = cfg.Bind("Explosions.Turret", "Velocity", 15f, "");
-            TurretPrimaryMin = cfg.Bind("Explosions.Turret", "PrimaryMin", 6, "");
-            TurretPrimaryMax = cfg.Bind("Explosions.Turret", "PrimaryMax", 13, "");
-            TurretSpeed = cfg.Bind("Explosions.Turret", "Speed", 40f, "");
-            TurretVisualMin = cfg.Bind("Explosions.Turret", "VisualMin", 45, "");
-            TurretVisualMax = cfg.Bind("Explosions.Turret", "VisualMax", 76, "");
+            // Turret
+            TurretRange = cfg.Bind("Explosions.Turret", "Range", 9f,
+                "Expected turret range for classification.");
+            TurretVelocity = cfg.Bind("Explosions.Turret", "Velocity", 15f,
+                "Expected turret velocity for classification.");
+            TurretPrimaryMin = cfg.Bind("Explosions.Turret", "PrimaryMin", 18,
+                "Min primary shrapnel count.");
+            TurretPrimaryMax = cfg.Bind("Explosions.Turret", "PrimaryMax", 35,
+                "Max primary shrapnel count (exclusive).");
+            TurretSpeed = cfg.Bind("Explosions.Turret", "Speed", 40f,
+                "Base speed (m/s).");
+            TurretVisualMin = cfg.Bind("Explosions.Turret", "VisualMin", 120,
+                "Min visual shrapnel count.");
+            TurretVisualMax = cfg.Bind("Explosions.Turret", "VisualMax", 200,
+                "Max visual shrapnel count (exclusive).");
 
-            MinePrimaryMin = cfg.Bind("Explosions.Mine", "PrimaryMin", 25, "");
-            MinePrimaryMax = cfg.Bind("Explosions.Mine", "PrimaryMax", 37, "");
-            MineSpeed = cfg.Bind("Explosions.Mine", "Speed", 45f, "");
-            MineVisualMin = cfg.Bind("Explosions.Mine", "VisualMin", 75, "");
-            MineVisualMax = cfg.Bind("Explosions.Mine", "VisualMax", 121, "");
+            // Mine
+            MinePrimaryMin = cfg.Bind("Explosions.Mine", "PrimaryMin", 50,
+                "Min primary shrapnel count.");
+            MinePrimaryMax = cfg.Bind("Explosions.Mine", "PrimaryMax", 85,
+                "Max primary shrapnel count (exclusive).");
+            MineSpeed = cfg.Bind("Explosions.Mine", "Speed", 50f,
+                "Base speed (m/s).");
+            MineVisualMin = cfg.Bind("Explosions.Mine", "VisualMin", 180,
+                "Min visual shrapnel count.");
+            MineVisualMax = cfg.Bind("Explosions.Mine", "VisualMax", 280,
+                "Max visual shrapnel count (exclusive).");
+
+            // ── Ground Debris ──
+            GroundDebrisRangeMultiplier = cfg.Bind("GroundDebris", "RangeMultiplier", 3.5f,
+                new ConfigDescription("Scan radius multiplier relative to explosion range.",
+                    new AcceptableValueRange<float>(1f, 6f)));
+
+            GroundDebrisCountMultiplier = cfg.Bind("GroundDebris", "CountMultiplier", 1.5f,
+                new ConfigDescription("Particle count multiplier for ground debris.",
+                    new AcceptableValueRange<float>(0.5f, 4f)));
+
+            // ── Sparks (Shrapnel Projectile Impacts) ──
+            MetalImpactSparksMin = cfg.Bind("Sparks", "MetalImpactMin", 6,
+                new ConfigDescription("Min sparks when shrapnel hits metal.",
+                    new AcceptableValueRange<int>(1, 20)));
+
+            MetalImpactSparksMax = cfg.Bind("Sparks", "MetalImpactMax", 14,
+                new ConfigDescription("Max sparks when shrapnel hits metal (exclusive).",
+                    new AcceptableValueRange<int>(2, 30)));
+
+            RicochetSparksMin = cfg.Bind("Sparks", "RicochetSparksMin", 10,
+                new ConfigDescription("Min sparks on ricochet.",
+                    new AcceptableValueRange<int>(3, 25)));
+
+            RicochetSparksMax = cfg.Bind("Sparks", "RicochetSparksMax", 20,
+                new ConfigDescription("Max sparks on ricochet (exclusive).",
+                    new AcceptableValueRange<int>(5, 40)));
+
+            RicochetDebrisMin = cfg.Bind("Sparks", "RicochetDebrisMin", 3,
+                new ConfigDescription("Min debris particles on ricochet.",
+                    new AcceptableValueRange<int>(0, 10)));
+
+            RicochetDebrisMax = cfg.Bind("Sparks", "RicochetDebrisMax", 7,
+                new ConfigDescription("Max debris particles on ricochet (exclusive).",
+                    new AcceptableValueRange<int>(1, 15)));
+
+            // ── Advanced Explosion Effects ──
+            EnableSmokeColumn = cfg.Bind("Effects.Explosion", "EnableSmokeColumn", true,
+                "Enable rising smoke column after explosions.");
+
+            EnableFireEmbers = cfg.Bind("Effects.Explosion", "EnableFireEmbers", true,
+                "Enable glowing fire embers that scatter and land.");
+
+            EnableCraterDust = cfg.Bind("Effects.Explosion", "EnableCraterDust", true,
+                "Enable lingering dust cloud at crater.");
+
+            SmokeColumnCountMultiplier = cfg.Bind("Effects.Explosion", "SmokeColumnCount", 1f,
+                new ConfigDescription("Smoke column particle count multiplier.",
+                    new AcceptableValueRange<float>(0.1f, 3f)));
+
+            SmokeColumnLifetimeMultiplier = cfg.Bind("Effects.Explosion", "SmokeColumnLifetime", 1f,
+                new ConfigDescription("Smoke column lifetime multiplier.",
+                    new AcceptableValueRange<float>(0.5f, 3f)));
+
+            FireEmbersCountMultiplier = cfg.Bind("Effects.Explosion", "FireEmbersCount", 1f,
+                new ConfigDescription("Fire embers count multiplier.",
+                    new AcceptableValueRange<float>(0.1f, 3f)));
+
+            CraterDustCountMultiplier = cfg.Bind("Effects.Explosion", "CraterDustCount", 1f,
+                new ConfigDescription("Crater dust particle count multiplier.",
+                    new AcceptableValueRange<float>(0.1f, 3f)));
+
+            CraterDustLifetimeMultiplier = cfg.Bind("Effects.Explosion", "CraterDustLifetime", 1f,
+                new ConfigDescription("Crater dust lifetime multiplier.",
+                    new AcceptableValueRange<float>(0.5f, 3f)));
+
+            // ── Enhanced Bullet Impact Effects ──
+            ImpactStreakSparksMin = cfg.Bind("Effects.BulletImpact", "StreakSparksMin", 12,
+                new ConfigDescription("Min fast streak sparks on metal impact.",
+                    new AcceptableValueRange<int>(3, 30)));
+
+            ImpactStreakSparksMax = cfg.Bind("Effects.BulletImpact", "StreakSparksMax", 22,
+                new ConfigDescription("Max fast streak sparks on metal impact.",
+                    new AcceptableValueRange<int>(5, 50)));
+
+            RicochetStreakSparksMin = cfg.Bind("Effects.BulletImpact", "RicochetStreakMin", 18,
+                new ConfigDescription("Min streak sparks on ricochet.",
+                    new AcceptableValueRange<int>(5, 40)));
+
+            RicochetStreakSparksMax = cfg.Bind("Effects.BulletImpact", "RicochetStreakMax", 30,
+                new ConfigDescription("Max streak sparks on ricochet.",
+                    new AcceptableValueRange<int>(10, 60)));
+
+            ImpactFloatSparksMin = cfg.Bind("Effects.BulletImpact", "FloatSparksMin", 6,
+                new ConfigDescription("Min slow floating sparks.",
+                    new AcceptableValueRange<int>(0, 20)));
+
+            ImpactFloatSparksMax = cfg.Bind("Effects.BulletImpact", "FloatSparksMax", 12,
+                new ConfigDescription("Max slow floating sparks.",
+                    new AcceptableValueRange<int>(1, 30)));
+
+            ImpactMetalChipsMin = cfg.Bind("Effects.BulletImpact", "MetalChipsMin", 3,
+                new ConfigDescription("Min metal chip debris on impact.",
+                    new AcceptableValueRange<int>(0, 15)));
+
+            ImpactMetalChipsMax = cfg.Bind("Effects.BulletImpact", "MetalChipsMax", 8,
+                new ConfigDescription("Max metal chip debris on impact.",
+                    new AcceptableValueRange<int>(1, 20)));
 
             // ── Debris Lifetime ──
-            DebrisLifetimeMetal = cfg.Bind("Lifetime", "Metal", 600f,
-                "Время жизни Metal debris (сек).");
-            DebrisLifetimeHeavyMetal = cfg.Bind("Lifetime", "HeavyMetal", 750f, "");
-            DebrisLifetimeStone = cfg.Bind("Lifetime", "Stone", 360f, "");
-            DebrisLifetimeWood = cfg.Bind("Lifetime", "Wood", 240f, "");
-            DebrisLifetimeElectronic = cfg.Bind("Lifetime", "Electronic", 450f, "");
-            StuckLifetime = cfg.Bind("Lifetime", "Stuck", 15f,
-                "Время жизни осколка в стене (сек).");
+            DebrisLifetimeMetal = cfg.Bind("Lifetime", "Metal", 900f,
+                "Metal debris lifetime (seconds). 900 = 15 minutes.");
+            DebrisLifetimeHeavyMetal = cfg.Bind("Lifetime", "HeavyMetal", 1200f,
+                "Heavy metal debris lifetime (seconds). 1200 = 20 minutes.");
+            DebrisLifetimeStone = cfg.Bind("Lifetime", "Stone", 600f,
+                "Stone debris lifetime (seconds). 600 = 10 minutes.");
+            DebrisLifetimeWood = cfg.Bind("Lifetime", "Wood", 420f,
+                "Wood debris lifetime (seconds). 420 = 7 minutes.");
+            DebrisLifetimeElectronic = cfg.Bind("Lifetime", "Electronic", 720f,
+                "Electronic debris lifetime (seconds). 720 = 12 minutes.");
+            StuckLifetime = cfg.Bind("Lifetime", "Stuck", 60f,
+                "Shrapnel stuck in wall lifetime (seconds).");
 
             // ── Interact ──
             MaxInteractDistance = cfg.Bind("Interact", "MaxClickDistance", 3f,
-                "Макс. дистанция уничтожения кликом (тайлы).");
+                "Max distance to destroy debris by clicking (tiles).");
         }
     }
 }

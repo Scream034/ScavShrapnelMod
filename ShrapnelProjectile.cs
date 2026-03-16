@@ -5,23 +5,19 @@ using ScavShrapnelMod.Helpers;
 namespace ScavShrapnelMod
 {
     /// <summary>
-    /// Основной компонент осколка. Finite State Machine: Flying → Stuck/Debris.
-    /// 
-    /// Управляет:
-    /// - Физикой (скорость, гравитация, коллизии)
-    /// - Остыванием (Heat → cold color)
-    /// - Уроном (при попадании в Limb/Body)
-    /// - Визуальными эффектами (обводка, искры, пар)
-    /// - Рикошетом от металла
-    /// - Разрушением при столкновении
-    /// - Интерактивностью (клик мышью для уничтожения)
-    /// 
-    /// Конфигурируемые параметры:
-    /// - Stuck lifetime: <see cref="ShrapnelConfig.StuckLifetime"/>
-    /// - Debris lifetime: <see cref="ShrapnelConfig"/> (по типу материала)
-    /// - Interact distance: <see cref="ShrapnelConfig.MaxInteractDistance"/>
+    /// Main shrapnel component. Finite State Machine: Flying -> Stuck/Debris.
+    ///
+    /// Manages:
+    /// - Physics (speed, gravity, collisions)
+    /// - Heat cooldown (Hot -> cold color)
+    /// - Damage (on Limb/Body hit)
+    /// - Visual effects (outline, sparks, steam)
+    /// - Ricochet from metal with many sparks
+    /// - Breaking on impact
+    /// - Logarithmic damage decay over lifetime
+    /// - Visual decay (shrink + spin) in last 30% of lifetime
     /// </summary>
-    public class ShrapnelProjectile : MonoBehaviour
+    public sealed class ShrapnelProjectile : MonoBehaviour
     {
         // ── ENUMS ──
 
@@ -30,55 +26,23 @@ namespace ScavShrapnelMod
 
         // ── CONSTANTS ──
 
-        /// <summary>
-        /// Unity layer index для Ground/блоков.
-        /// Верифицировано из TurretScript.Shoot: LayerMask.GetMask("Ground").
-        /// </summary>
         private const int GroundLayer = 6;
-
-        /// <summary>Максимальная скорость (м/с). Предотвращает туннелирование через коллайдеры.</summary>
         private const float MaxVelocity = 100f;
-
-        /// <summary>Задержка включения коллайдера (сек). Предотвращает self-collision в эпицентре.</summary>
         private const float PhysicsDelaySeconds = 0.05f;
-
-        /// <summary>Макс блоков, которые осколок может разрушить за полёт.</summary>
         private const int MaxBlocksToDestroy = 3;
-
-        /// <summary>Макс рикошетов от металлических поверхностей.</summary>
         private const int MaxRicochets = 3;
-
-        /// <summary>Максимальный угол (градусы) для рикошета. Выше — осколок застревает.</summary>
         private const float RicochetMaxAngleDeg = 30f;
-
-        /// <summary>Сохранение скорости при рикошете (0-1).</summary>
         private const float RicochetSpeedRetention = 0.7f;
-
-        /// <summary>Минимальная скорость для рикошета (м/с).</summary>
         private const float RicochetMinSpeed = 5f;
-
-        /// <summary>Скорость остывания (Heat единиц / сек).</summary>
         private const float HeatCoolRate = 0.42f;
-
-        /// <summary>Масштаб обводки относительно родителя.</summary>
         private const float OutlineScaleMultiplier = 1.4f;
-
-        /// <summary>Базовая альфа обводки.</summary>
         private const float OutlineAlphaBase = 0.35f;
-
-        /// <summary>Минимальная скорость полёта (sqr magnitude). Ниже — переход в Debris.</summary>
         private const float MinFlySqrSpeed = 0.5f;
-
-        /// <summary>Минимальное время полёта перед переходом в debris (сек).</summary>
         private const float MinFlyTimeBeforeDebris = 0.3f;
-
-        /// <summary>Минимальная скорость удара для обработки столкновения с блоком.</summary>
         private const float MinBlockImpactSpeed = 3f;
-
-        /// <summary>Скорость удара для спавна искры при столкновении с металлом.</summary>
         private const float SparkImpactSpeed = 9f;
 
-        // ── PUBLIC FIELDS (устанавливаются ShrapnelFactory) ──
+        // ── PUBLIC FIELDS ──
 
         public ShrapnelType Type;
         public ShrapnelWeight Weight;
@@ -90,44 +54,67 @@ namespace ScavShrapnelMod
 
         // ── PRIVATE FIELDS ──
 
-        // Кэш компонентов
         private Rigidbody2D rb;
         private SpriteRenderer sr;
         private TrailRenderer trail;
         private Collider2D _col;
+        private Transform _transform;
 
-        // FSM
         private State state = State.Flying;
         private float lifeTimer;
         private float maxLifetime = 5f;
         private float _physicsDelay = PhysicsDelaySeconds;
 
-        // Stuck state
         private float stuckTimer;
-
-        // Debris state
         private float debrisTimer;
         private float debrisLifetime;
 
-        // Лимиты
         private int _blocksDestroyed;
         private int _ricochetCount;
 
-        // Водяная деактивация
         private bool _submerged;
 
-        // Heat
         private Color coldColor;
         private bool cooledInWater;
         private float lastEmissionHeat = -1f;
 
-        // Frame-staggering: распределяет Update-логику по кадрам
         private int frameSlot;
 
-        // Outline (обводка вместо glow) — дочерний объект
         private GameObject _outlineObj;
         private SpriteRenderer _outlineSr;
         private bool _outlineApplied;
+
+        private Vector3 _originalScale;
+
+        /// <summary>
+        /// WHY: Deterministic RNG seeded per-instance for consistent spark/debris behavior.
+        /// Previous code used UnityEngine.Random which broke multiplayer determinism.
+        /// </summary>
+        private System.Random _rng;
+
+        // ── PROPERTIES ──
+
+        private float NormalizedLifetime
+        {
+            get
+            {
+                if (state == State.Stuck)
+                    return 1f - Mathf.Clamp01(stuckTimer / ShrapnelConfig.StuckLifetime.Value);
+                if (state == State.Debris)
+                    return 1f - Mathf.Clamp01(debrisTimer / debrisLifetime);
+                return 1f;
+            }
+        }
+
+        private float DamageDecayMultiplier
+        {
+            get
+            {
+                float t = NormalizedLifetime;
+                const float e = 2.71828f;
+                return Mathf.Log(1f + t * e) / Mathf.Log(1f + e);
+            }
+        }
 
         // ── UNITY LIFECYCLE ──
 
@@ -137,12 +124,19 @@ namespace ScavShrapnelMod
             sr = GetComponent<SpriteRenderer>();
             trail = GetComponent<TrailRenderer>();
             _col = GetComponent<Collider2D>();
-            frameSlot = Mathf.Abs(GetInstanceID()) % 10;
+            _transform = transform;
+
+            int id = GetInstanceID();
+            frameSlot = Mathf.Abs(id) % 10;
+
+            // WHY: Seed RNG from instance ID + frame for deterministic per-object randomness
+            _rng = new System.Random(unchecked(id * 397 ^ Time.frameCount));
         }
 
         private void Start()
         {
             coldColor = ShrapnelVisuals.GetColdColor(Type);
+            _originalScale = _transform.localScale;
         }
 
         private void Update()
@@ -151,7 +145,7 @@ namespace ScavShrapnelMod
             switch (state)
             {
                 case State.Flying: UpdateFlying(frame); break;
-                case State.Stuck:  UpdateStuck(frame);  break;
+                case State.Stuck: UpdateStuck(frame); break;
                 case State.Debris: UpdateDebris(frame); break;
             }
         }
@@ -160,7 +154,6 @@ namespace ScavShrapnelMod
 
         private void UpdateFlying(int frame)
         {
-            // Micro-delay для коллайдера — предотвращает взрыв осколков друг от друга в эпицентре
             if (_physicsDelay > 0f)
             {
                 _physicsDelay -= Time.deltaTime;
@@ -171,23 +164,19 @@ namespace ScavShrapnelMod
             lifeTimer += Time.deltaTime;
             if (lifeTimer > maxLifetime) { BecomeDebris(); return; }
 
-            // Кламп скорости — предотвращает туннелирование
             float sqrSpeed = rb.velocity.sqrMagnitude;
             if (sqrSpeed > MaxVelocity * MaxVelocity)
                 rb.velocity = rb.velocity.normalized * MaxVelocity;
 
-            // Почти остановился → debris
             if (sqrSpeed < MinFlySqrSpeed && lifeTimer > MinFlyTimeBeforeDebris)
             { BecomeDebris(); return; }
 
-            // Поворот спрайта по вектору скорости
             if (sqrSpeed > 4f)
             {
                 float angle = Mathf.Atan2(rb.velocity.y, rb.velocity.x) * Mathf.Rad2Deg;
-                transform.rotation = Quaternion.AngleAxis(angle, Vector3.forward);
+                _transform.rotation = Quaternion.AngleAxis(angle, Vector3.forward);
             }
 
-            // Остывание (frame-staggered: каждый 3-й кадр, компенсируя ×3 deltaTime)
             if (frame % 3 == frameSlot % 3)
                 TickHeat(Time.deltaTime * 3f);
         }
@@ -209,6 +198,8 @@ namespace ScavShrapnelMod
                 _outlineApplied = true;
             }
 
+            ApplyVisualDecay();
+
             if (frame % 5 == frameSlot % 5)
                 PulseOutline();
 
@@ -221,13 +212,19 @@ namespace ScavShrapnelMod
         private void UpdateDebris(int frame)
         {
             debrisTimer += Time.deltaTime;
-            if (debrisTimer > debrisLifetime) { Destroy(gameObject); return; }
+            if (debrisTimer > debrisLifetime)
+            {
+                Destroy(gameObject);
+                return;
+            }
 
             if (!_outlineApplied)
             {
                 CreateOutline();
                 _outlineApplied = true;
             }
+
+            ApplyVisualDecay();
 
             if (frame % 5 == frameSlot % 5)
                 PulseOutline();
@@ -239,20 +236,41 @@ namespace ScavShrapnelMod
                 CheckSupportAndFall();
         }
 
-        // ── OUTLINE — красная обводка (дочерний спрайт) ──
+        // ── VISUAL DECAY ──
 
-        /// <summary>
-        /// Создаёт красную обводку: дочерний спрайт = тот же спрайт,
-        /// масштаб ×1.4, позади родителя, Unlit-материал.
-        /// Не создаётся если осколок в воде (безопасен для наступания).
-        /// </summary>
+        private void ApplyVisualDecay()
+        {
+            float t = NormalizedLifetime;
+
+            // Only decay in last 30% of lifetime
+            if (t > 0.3f) return;
+
+            float decayT = t / 0.3f;
+            float decayFactor = decayT * decayT * (3f - 2f * decayT);
+
+            float shrinkFactor = 0.2f + 0.8f * decayFactor;
+            _transform.localScale = _originalScale * shrinkFactor;
+
+            float spinSpeed = (1f - decayFactor) * 360f;
+            _transform.Rotate(0f, 0f, spinSpeed * Time.deltaTime);
+
+            if (sr != null)
+            {
+                Color c = sr.color;
+                c.a = Mathf.Lerp(0.1f, 1f, decayFactor);
+                sr.color = c;
+            }
+        }
+
+        // ── OUTLINE ──
+
         private void CreateOutline()
         {
             if (_outlineObj != null) return;
             if (_submerged) return;
 
             _outlineObj = new GameObject("Outline");
-            _outlineObj.transform.SetParent(transform, false);
+            _outlineObj.transform.SetParent(_transform, false);
             _outlineObj.transform.localPosition = Vector3.zero;
             _outlineObj.transform.localRotation = Quaternion.identity;
             _outlineObj.transform.localScale = Vector3.one * OutlineScaleMultiplier;
@@ -264,7 +282,6 @@ namespace ScavShrapnelMod
             _outlineSr.color = new Color(0.9f, 0.1f, 0.05f, OutlineAlphaBase);
         }
 
-        /// <summary>Удаляет обводку и обнуляет ссылки.</summary>
         private void DestroyOutline()
         {
             if (_outlineObj != null)
@@ -275,10 +292,6 @@ namespace ScavShrapnelMod
             }
         }
 
-        /// <summary>
-        /// Пульсация обводки: альфа колеблется 20-50%.
-        /// Скрывает обводку если осколок оказался в воде.
-        /// </summary>
         private void PulseOutline()
         {
             if (_outlineSr == null) return;
@@ -296,17 +309,13 @@ namespace ScavShrapnelMod
             _outlineSr.color = new Color(0.9f, 0.1f, 0.05f, alpha);
         }
 
-        // ── ВОДЯНАЯ ДЕАКТИВАЦИЯ ──
+        // ── WATER CHECK ──
 
-        /// <summary>
-        /// Проверяет наличие жидкости (вода, масло, сок и т.д.) в позиции осколка.
-        /// Если жидкость есть — debris безопасен для наступания.
-        /// </summary>
         private void CheckSubmerged()
         {
             try
             {
-                Vector2Int wPos = WorldGeneration.world.WorldToBlockPos(transform.position);
+                Vector2Int wPos = WorldGeneration.world.WorldToBlockPos(_transform.position);
                 float liquidLevel = FluidManager.main.WaterInfo(wPos).Item1;
                 _submerged = liquidLevel > 0f;
             }
@@ -319,15 +328,22 @@ namespace ScavShrapnelMod
         // ── SUPPORT CHECK ──
 
         /// <summary>
-        /// Проверяет, есть ли опора под осколком.
-        /// Если текущий блок и блок ниже — воздух, возвращает в Flying
-        /// (блок под осколком был разрушен).
+        /// Checks if there's support under the shrapnel.
+        /// Only active in Stuck/Debris states (not Flying).
+        ///
+        /// WHY: Previous version destroyed shrapnel on IndexOutOfRangeException
+        /// which killed many shrapnel that briefly flew outside world bounds.
+        /// Now only destroys if CONFIRMED no support, not on exceptions.
         /// </summary>
         private void CheckSupportAndFall()
         {
+            // WHY: Only check support for Stuck/Debris.
+            // Flying shrapnel handles its own out-of-bounds via lifeTimer.
+            if (state == State.Flying) return;
+
             try
             {
-                Vector2Int currentPos = WorldGeneration.world.WorldToBlockPos((Vector2)transform.position);
+                Vector2Int currentPos = WorldGeneration.world.WorldToBlockPos((Vector2)_transform.position);
                 Vector2Int belowPos = currentPos + Vector2Int.down;
 
                 if (WorldGeneration.world.GetBlock(currentPos) == 0 &&
@@ -338,36 +354,38 @@ namespace ScavShrapnelMod
             }
             catch (IndexOutOfRangeException)
             {
-                Destroy(gameObject);
+                // WHY: Shrapnel is outside world bounds.
+                // For Debris/Stuck this means the block was destroyed and
+                // shrapnel is falling into void. Safe to destroy.
+                // But DON'T destroy Flying shrapnel here — let lifeTimer handle it.
+                if (state == State.Stuck || state == State.Debris)
+                    Destroy(gameObject);
             }
         }
 
-        /// <summary>
-        /// Переводит осколок обратно в Flying (блок-опора разрушен).
-        /// Восстанавливает физику с настройками по весу.
-        /// </summary>
         private void RestorePhysicsAndFly()
         {
             state = State.Flying;
             _outlineApplied = false;
             lifeTimer = 0f;
             maxLifetime = 3f;
+            _originalScale = _transform.localScale;
             rb.isKinematic = false;
 
             switch (Weight)
             {
-                case ShrapnelWeight.Hot:     rb.gravityScale = 0.3f;  break;
-                case ShrapnelWeight.Medium:  rb.gravityScale = 0.15f; break;
-                case ShrapnelWeight.Heavy:   rb.gravityScale = 0.35f; break;
-                case ShrapnelWeight.Massive: rb.gravityScale = 0.5f;  break;
-                default:                     rb.gravityScale = 0.5f;  break;
+                case ShrapnelWeight.Hot: rb.gravityScale = 0.3f; break;
+                case ShrapnelWeight.Medium: rb.gravityScale = 0.15f; break;
+                case ShrapnelWeight.Heavy: rb.gravityScale = 0.35f; break;
+                case ShrapnelWeight.Massive: rb.gravityScale = 0.5f; break;
+                default: rb.gravityScale = 0.5f; break;
             }
 
             if (_col != null) _col.isTrigger = false;
             DestroyOutline();
         }
 
-        // ── COLLISION HANDLING ──
+        // ── COLLISION ──
 
         private void OnCollisionEnter2D(Collision2D collision)
         {
@@ -389,7 +407,7 @@ namespace ScavShrapnelMod
             if (collision.collider.TryGetComponent(out Body body) &&
                 body.limbs != null && body.limbs.Length > 0)
             {
-                Limb target = FindClosestLimb(body, collision);
+                Limb target = FindBestLimbByTrajectory(body, collision);
                 HitLimb(target);
                 return;
             }
@@ -398,14 +416,52 @@ namespace ScavShrapnelMod
                 HitBlock(collision);
         }
 
-        /// <summary>
-        /// Находит ближайшую неотрублённую конечность к точке попадания.
-        /// </summary>
+        private Limb FindBestLimbByTrajectory(Body body, Collision2D collision)
+        {
+            if (rb == null || rb.isKinematic || rb.bodyType == RigidbodyType2D.Static)
+                return FindClosestLimb(body, collision);
+
+            Vector2 shrapnelPos = (Vector2)_transform.position;
+            Vector2 vel = rb.velocity;
+
+            if (vel.sqrMagnitude < 1f)
+                return FindClosestLimb(body, collision);
+
+            Vector2 velDir = vel.normalized;
+
+            Limb bestLimb = null;
+            float bestScore = float.MaxValue;
+
+            for (int i = 0; i < body.limbs.Length; i++)
+            {
+                Limb l = body.limbs[i];
+                if (l == null || l.dismembered) continue;
+
+                Vector2 limbPos = (Vector2)l.transform.position;
+                Vector2 toL = limbPos - shrapnelPos;
+
+                float forward = Vector2.Dot(toL, velDir);
+                Vector2 closestOnRay = shrapnelPos + velDir * forward;
+                float perpDistSqr = (limbPos - closestOnRay).sqrMagnitude;
+
+                float behindPenalty = forward < 0f ? 4f : 0f;
+                float score = perpDistSqr + behindPenalty;
+
+                if (score < bestScore)
+                {
+                    bestScore = score;
+                    bestLimb = l;
+                }
+            }
+
+            return bestLimb ?? FindClosestLimb(body, collision);
+        }
+
         private Limb FindClosestLimb(Body body, Collision2D collision)
         {
             Vector2 hitPos = collision.contactCount > 0
                 ? collision.GetContact(0).point
-                : (Vector2)transform.position;
+                : (Vector2)_transform.position;
 
             Limb closest = body.limbs[0];
             float closestDist = float.MaxValue;
@@ -426,16 +482,6 @@ namespace ScavShrapnelMod
             return closest;
         }
 
-        /// <summary>
-        /// Обработка столкновения с блоком Ground.
-        /// 
-        /// Порядок проверок:
-        /// 1. Рикошет (металл + скользящий угол)
-        /// 2. Разрушение осколка (тяжёлый + высокая скорость)
-        /// 3. Разрушение блока (кинетическая энергия > health)
-        /// 4. Застревание (мягкий блок или лимит разрушений)
-        /// 5. Искра (металл + высокая скорость)
-        /// </summary>
         private void HitBlock(Collision2D collision)
         {
             if (collision.contactCount == 0) return;
@@ -462,7 +508,6 @@ namespace ScavShrapnelMod
 
                 float kineticDamage = impactSpeed * rb.mass * 10f;
 
-                // Разрушение мягких блоков (с лимитом)
                 if (kineticDamage > info.health && _blocksDestroyed < MaxBlocksToDestroy)
                 {
                     if (ShrapnelFactory.TryDamageSlot())
@@ -488,26 +533,15 @@ namespace ScavShrapnelMod
                 }
 
                 if (info.metallic && impactSpeed > SparkImpactSpeed)
-                    SpawnSpark(hitPoint);
+                    SpawnSparks(hitPoint, hitNormal, false);
 
                 rb.velocity *= 0.4f;
             }
             catch { BecomeDebris(); }
         }
 
-        // ── РИКОШЕТ ──
+        // ── RICOCHET ──
 
-        /// <summary>
-        /// Рикошет от металлического блока под скользящим углом (≤30°).
-        /// 
-        /// Условия:
-        /// - Блок металлический
-        /// - Скорость ≥ RicochetMinSpeed
-        /// - Угол от поверхности ≤ RicochetMaxAngleDeg
-        /// - Не превышен лимит рикошетов
-        /// 
-        /// При рикошете скорость сохраняется × RicochetSpeedRetention.
-        /// </summary>
         private bool TryRicochet(float impactSpeed, Vector2 hitPoint, Vector2 hitNormal)
         {
             if (_ricochetCount >= MaxRicochets) return false;
@@ -534,23 +568,21 @@ namespace ScavShrapnelMod
             rb.velocity = reflected * RicochetSpeedRetention;
             _ricochetCount++;
 
-            SpawnSpark(hitPoint);
+            // Spawn many sparks and debris on ricochet
+            SpawnSparks(hitPoint, hitNormal, true);
+
             return true;
         }
 
-        /// <summary>
-        /// Проверка разрушения осколка при ударе.
-        /// Тяжёлые осколки имеют шанс разбиться на дочерние фрагменты.
-        /// </summary>
         private bool TryBreak(float impactSpeed, Vector2 hitPoint, Vector2 hitNormal)
         {
             float breakThreshold, breakChance;
             switch (Weight)
             {
-                case ShrapnelWeight.Massive: breakThreshold = 8f;  breakChance = 0.6f;  break;
-                case ShrapnelWeight.Heavy:   breakThreshold = 15f; breakChance = 0.35f; break;
-                case ShrapnelWeight.Medium:  breakThreshold = 20f; breakChance = 0.2f;  break;
-                default: return false; // Hot не разбивается
+                case ShrapnelWeight.Massive: breakThreshold = 8f; breakChance = 0.6f; break;
+                case ShrapnelWeight.Heavy: breakThreshold = 15f; breakChance = 0.35f; break;
+                case ShrapnelWeight.Medium: breakThreshold = 20f; breakChance = 0.2f; break;
+                default: return false;
             }
 
             if (impactSpeed < breakThreshold) return false;
@@ -559,16 +591,12 @@ namespace ScavShrapnelMod
             if (roll > breakChance) return false;
 
             ShrapnelFactory.SpawnBreakFragments(
-                hitPoint, hitNormal, transform.localScale.x,
+                hitPoint, hitNormal, _transform.localScale.x,
                 Type, Weight, impactSpeed);
             BreakShard();
             return true;
         }
 
-        /// <summary>
-        /// Детерминированный псевдослучай [0, 1) из позиции и текущего кадра.
-        /// Не использует System.Random — zero-alloc.
-        /// </summary>
         private float DeterministicRoll(Vector2 pos)
         {
             int hash = unchecked(
@@ -578,80 +606,149 @@ namespace ScavShrapnelMod
             return (float)((uint)hash % 10000) / 10000f;
         }
 
+        // ── SPARKS ──
+
         /// <summary>
-        /// Спавнит визуальную искру при столкновении с металлом.
+        /// Spawns sparks on metal impact or ricochet.
+        /// WHY: Now uses instance System.Random instead of UnityEngine.Random
+        /// for multiplayer determinism. All sparks registered in DebrisTracker.
         /// </summary>
-        private void SpawnSpark(Vector2 pos)
+        private void SpawnSparks(Vector2 pos, Vector2 normal, bool isRicochet)
         {
-            GameObject spark = new GameObject("Spark");
-            spark.transform.position = pos;
-            spark.transform.localScale = Vector3.one * 0.04f;
+            int minSparks, maxSparks;
+            if (isRicochet)
+            {
+                minSparks = ShrapnelConfig.RicochetSparksMin.Value;
+                maxSparks = ShrapnelConfig.RicochetSparksMax.Value;
+            }
+            else
+            {
+                minSparks = ShrapnelConfig.MetalImpactSparksMin.Value;
+                maxSparks = ShrapnelConfig.MetalImpactSparksMax.Value;
+            }
 
-            SpriteRenderer ssr = spark.AddComponent<SpriteRenderer>();
-            ssr.sprite = ShrapnelVisuals.GetTriangleSprite(ShrapnelVisuals.TriangleShape.Needle);
-            ssr.sharedMaterial = ShrapnelVisuals.LitMaterial;
-            ssr.color = new Color(1f, 0.8f, 0.3f);
-            ssr.sortingOrder = 11;
+            int sparkCount = _rng.Range(minSparks, maxSparks);
 
-            ShrapnelFactory.MPB.Clear();
-            ShrapnelFactory.MPB.SetColor(ShrapnelFactory.EmissionColorId, new Color(2f, 1.5f, 0.5f));
-            ssr.SetPropertyBlock(ShrapnelFactory.MPB);
+            for (int i = 0; i < sparkCount; i++)
+            {
+                GameObject spark = new GameObject("Spark");
+                spark.transform.position = pos + _rng.InsideUnitCircle() * 0.1f;
+                spark.transform.localScale = Vector3.one * _rng.Range(0.02f, 0.06f);
 
-            float sparkAngle = DeterministicRoll(pos) * Mathf.PI * 2f;
-            Vector2 dir = new Vector2(Mathf.Cos(sparkAngle), Mathf.Abs(Mathf.Sin(sparkAngle)));
-            float sparkForce = 1f + DeterministicRoll(pos + Vector2.one) * 2f;
+                SpriteRenderer ssr = spark.AddComponent<SpriteRenderer>();
+                ssr.sprite = ShrapnelVisuals.GetTriangleSprite(ShrapnelVisuals.TriangleShape.Needle);
+                ssr.sharedMaterial = ShrapnelVisuals.LitMaterial;
 
-            var visual = spark.AddComponent<VisualShrapnel>();
-            visual.Initialize(dir, sparkForce * 3f, 0.1f + DeterministicRoll(pos + Vector2.up) * 0.2f);
+                float colorVar = _rng.NextFloat();
+                ssr.color = new Color(
+                    1f,
+                    Mathf.Lerp(0.5f, 0.95f, colorVar),
+                    Mathf.Lerp(0.1f, 0.5f, colorVar));
+                ssr.sortingOrder = 11;
+
+                ShrapnelFactory.MPB.Clear();
+                ShrapnelFactory.MPB.SetColor(ShrapnelFactory.EmissionColorId,
+                    new Color(3f, Mathf.Lerp(1.5f, 2.5f, colorVar), 0.5f));
+                ssr.SetPropertyBlock(ShrapnelFactory.MPB);
+
+                float spreadAngle = _rng.Range(-60f, 60f) * Mathf.Deg2Rad;
+                Vector2 baseDir = isRicochet ? Vector2.Reflect(-rb.velocity.normalized, normal) : normal;
+                Vector2 sparkDir = MathHelper.RotateDirection(baseDir, spreadAngle);
+
+                float sparkSpeed = _rng.Range(3f, 10f);
+                float sparkLife = _rng.Range(0.08f, 0.25f);
+
+                var visual = spark.AddComponent<VisualShrapnel>();
+                visual.Initialize(sparkDir, sparkSpeed, sparkLife);
+
+                // WHY: Previously untracked — sparks were invisible to DebrisTracker,
+                // bypassing eviction cap and causing potential memory leaks.
+                DebrisTracker.RegisterVisual(spark);
+            }
+
+            if (isRicochet)
+            {
+                SpawnRicochetDebris(pos, normal);
+            }
+        }
+
+        /// <summary>
+        /// Spawns metal debris particles on ricochet.
+        /// WHY: Now uses instance System.Random for determinism.
+        /// </summary>
+        private void SpawnRicochetDebris(Vector2 pos, Vector2 normal)
+        {
+            int minDebris = ShrapnelConfig.RicochetDebrisMin.Value;
+            int maxDebris = ShrapnelConfig.RicochetDebrisMax.Value;
+            int debrisCount = _rng.Range(minDebris, maxDebris);
+
+            Material unlitMat = ShrapnelVisuals.UnlitMaterial;
+            if (unlitMat == null) return;
+
+            for (int i = 0; i < debrisCount; i++)
+            {
+                GameObject debris = new GameObject("RicochetDebris");
+                debris.transform.position = pos + _rng.InsideUnitCircle() * 0.08f;
+                debris.transform.localScale = Vector3.one * _rng.Range(0.03f, 0.08f);
+
+                SpriteRenderer dsr = debris.AddComponent<SpriteRenderer>();
+                dsr.sprite = ShrapnelVisuals.GetTriangleSprite(ShrapnelVisuals.TriangleShape.Chunk);
+                dsr.sharedMaterial = unlitMat;
+                dsr.sortingOrder = 10;
+
+                float gray = _rng.Range(0.3f, 0.5f);
+                Color debrisColor = new Color(gray, gray, gray, 0.9f);
+
+                float angle = _rng.Range(-70f, 70f) * Mathf.Deg2Rad;
+                Vector2 debrisDir = MathHelper.RotateDirection(normal, angle);
+
+                Vector2 velocity = debrisDir * _rng.Range(2f, 6f);
+
+                AshParticle ash = debris.AddComponent<AshParticle>();
+                ash.Initialize(velocity, _rng.Range(0.3f, 0.8f), debrisColor,
+                    _rng.Range(0f, 6.28f), 1.2f);
+
+                DebrisTracker.RegisterVisual(debris);
+            }
         }
 
         // ── LIMB DAMAGE ──
 
-        /// <summary>
-        /// Наносит урон конечности с учётом брони.
-        /// 
-        /// Эффекты зависят от веса:
-        /// - Hot: минимальный урон, редко застревает
-        /// - Medium: средний урон, умеренное кровотечение
-        /// - Heavy: сильный урон, шанс перелома, шанс внутреннего кровотечения
-        /// - Massive: летальный, гарантированный перелом, высокий шанс внутреннего кровотечения
-        /// 
-        /// Особые эффекты для головы: потеря сознания, повреждение мозга, обезображивание.
-        /// </summary>
         private void HitLimb(Limb limb)
         {
             if (limb.dismembered) { Destroy(gameObject); return; }
 
             float armor = limb.GetArmorReduction();
-            float dmg = Damage / armor;
-            float bleed = BleedAmount / armor;
+
+            float decayMult = DamageDecayMultiplier;
+            float dmg = Damage * decayMult / armor;
+            float bleed = BleedAmount * decayMult / armor;
 
             limb.skinHealth -= dmg * 0.7f;
             limb.muscleHealth -= dmg;
             limb.bleedAmount += bleed;
 
-            // Износ брони
             float armorWearAmount;
             switch (Weight)
             {
-                case ShrapnelWeight.Hot:     armorWearAmount = 0.005f; break;
-                case ShrapnelWeight.Medium:  armorWearAmount = 0.01f;  break;
-                case ShrapnelWeight.Heavy:   armorWearAmount = 0.02f;  break;
-                case ShrapnelWeight.Massive: armorWearAmount = 0.05f;  break;
-                default:                     armorWearAmount = 0.01f;  break;
+                case ShrapnelWeight.Hot: armorWearAmount = 0.005f; break;
+                case ShrapnelWeight.Medium: armorWearAmount = 0.01f; break;
+                case ShrapnelWeight.Heavy: armorWearAmount = 0.02f; break;
+                case ShrapnelWeight.Massive: armorWearAmount = 0.05f; break;
+                default: armorWearAmount = 0.01f; break;
             }
             limb.DamageWearables(armorWearAmount);
 
-            // Шанс застревания — armor² для учёта качества брони
             float embedChance;
             switch (Weight)
             {
-                case ShrapnelWeight.Hot:     embedChance = 0.15f; break;
-                case ShrapnelWeight.Medium:  embedChance = 0.4f;  break;
-                case ShrapnelWeight.Heavy:   embedChance = 0.7f;  break;
-                case ShrapnelWeight.Massive: embedChance = 0.9f;  break;
-                default:                     embedChance = 0.3f;  break;
+                case ShrapnelWeight.Hot: embedChance = 0.15f; break;
+                case ShrapnelWeight.Medium: embedChance = 0.4f; break;
+                case ShrapnelWeight.Heavy: embedChance = 0.7f; break;
+                case ShrapnelWeight.Massive: embedChance = 0.9f; break;
+                default: embedChance = 0.3f; break;
             }
+            embedChance *= decayMult;
 
             Vector2 limbPos = (Vector2)limb.transform.position;
             float roll1 = DeterministicRoll(limbPos);
@@ -659,7 +756,6 @@ namespace ScavShrapnelMod
             if (roll1 < embedChance / (armor * armor) && roll2 > 0.2f)
                 limb.shrapnel++;
 
-            // Переломы
             if (Weight == ShrapnelWeight.Massive)
             {
                 limb.BreakBone();
@@ -671,39 +767,42 @@ namespace ScavShrapnelMod
                     limb.BreakBone();
             }
 
-            // Внутреннее кровотечение (для жизненно важных конечностей)
             if (limb.isVital && Weight != ShrapnelWeight.Hot)
             {
                 float intChance = Weight == ShrapnelWeight.Massive ? 0.6f
                                 : (Weight == ShrapnelWeight.Heavy ? 0.3f : 0.15f);
+                intChance *= decayMult;
                 if (DeterministicRoll(limbPos + Vector2.down) < intChance / armor)
                     limb.body.internalBleeding += dmg * 0.3f;
             }
 
-            // Голова — особые эффекты
             if (limb.isHead)
             {
                 limb.body.consciousness -= dmg * 2f;
 
                 if ((Weight == ShrapnelWeight.Heavy || Weight == ShrapnelWeight.Massive) &&
-                    DeterministicRoll(limbPos * 2f) < 0.2f / armor)
+                    DeterministicRoll(limbPos * 2f) < 0.2f * decayMult / armor)
                     limb.body.brainHealth -= dmg * 0.5f;
 
                 if (Weight == ShrapnelWeight.Massive &&
-                    DeterministicRoll(limbPos * 3f) < 0.3f / armor)
+                    DeterministicRoll(limbPos * 3f) < 0.3f * decayMult / armor)
                     limb.body.Disfigure();
             }
 
-            limb.body.shock = Mathf.Max(limb.body.shock, Damage * 2f);
-            limb.body.adrenaline = Mathf.Max(limb.body.adrenaline, 20f + Damage);
+            limb.body.shock = Mathf.Max(limb.body.shock, Damage * decayMult * 2f);
+            limb.body.adrenaline = Mathf.Max(limb.body.adrenaline, 20f + Damage * decayMult);
             limb.body.DoGoreSound();
             limb.body.talker.Talk(Locale.GetCharacter("loud"), null, false, false);
 
-            // Рэгдолл при тяжёлых попаданиях
-            if (Weight == ShrapnelWeight.Heavy || Weight == ShrapnelWeight.Massive || Damage > 15f)
+            float ragdollThreshold = state == State.Flying ? 15f : 25f;
+            if (Weight == ShrapnelWeight.Heavy || Weight == ShrapnelWeight.Massive ||
+                Damage * decayMult > ragdollThreshold)
             {
-                limb.body.lastTimeStepVelocity = rb.velocity.normalized *
-                    (Weight == ShrapnelWeight.Massive ? 10f : 5f);
+                Vector2 knockbackDir = (state == State.Flying && rb != null && !rb.isKinematic)
+                    ? rb.velocity.normalized
+                    : Vector2.up;
+                limb.body.lastTimeStepVelocity = knockbackDir *
+                    (Weight == ShrapnelWeight.Massive ? 10f : 5f) * decayMult;
                 limb.body.Ragdoll();
             }
 
@@ -711,10 +810,6 @@ namespace ScavShrapnelMod
             Destroy(gameObject);
         }
 
-        /// <summary>
-        /// Применяет визуальные эффекты ран на конечности.
-        /// Спрайты загружаются через <see cref="ShrapnelFactory.EnsureWoundSprites"/>.
-        /// </summary>
         private void ApplyWoundVisuals(Limb limb)
         {
             try
@@ -735,33 +830,48 @@ namespace ScavShrapnelMod
         // ── STATE TRANSITIONS ──
 
         /// <summary>
-        /// Переводит осколок в состояние Stuck (застрял в блоке).
-        /// Останавливает физику, позиционирует в точке попадания.
+        /// Transitions shrapnel to Stuck state (embedded in block).
+        /// Stops physics, positions at hit point.
         /// </summary>
         private void BecomeStuck(Vector2Int blockPos, Vector2 hitPoint)
         {
             state = State.Stuck;
             stuckTimer = 0f;
             _outlineApplied = false;
-            rb.velocity = Vector2.zero;
-            rb.angularVelocity = 0f;
+            _originalScale = _transform.localScale;
+
+            // WHY: Check body type before velocity access
+            if (rb != null && !rb.isKinematic && rb.bodyType != RigidbodyType2D.Static)
+            {
+                rb.velocity = Vector2.zero;
+                rb.angularVelocity = 0f;
+            }
             rb.isKinematic = true;
-            transform.position = (Vector2)hitPoint;
+
+            _transform.position = (Vector2)hitPoint;
             if (trail != null) trail.enabled = false;
             ClearHeatAndEmission();
         }
 
         /// <summary>
-        /// Переводит осколок в состояние Debris (лежит на поверхности).
-        /// Время жизни берётся из конфига по типу материала.
+        /// Transitions shrapnel to Debris state (lying on surface).
+        /// Lifetime from config based on material type.
         /// </summary>
         private void BecomeDebris()
         {
             state = State.Debris;
             _outlineApplied = false;
-            rb.velocity = Vector2.zero;
-            rb.angularVelocity = 0f;
+            _originalScale = _transform.localScale;
+
+            // WHY: Check isKinematic before accessing velocity to prevent
+            // "Cannot use velocity on static body" error
+            if (rb != null && !rb.isKinematic && rb.bodyType != RigidbodyType2D.Static)
+            {
+                rb.velocity = Vector2.zero;
+                rb.angularVelocity = 0f;
+            }
             rb.isKinematic = true;
+
             if (trail != null) trail.enabled = false;
             if (_col != null) _col.isTrigger = true;
             ClearHeatAndEmission();
@@ -770,24 +880,17 @@ namespace ScavShrapnelMod
 
             switch (Type)
             {
-                case ShrapnelType.Metal:      debrisLifetime = ShrapnelConfig.DebrisLifetimeMetal.Value;      break;
+                case ShrapnelType.Metal: debrisLifetime = ShrapnelConfig.DebrisLifetimeMetal.Value; break;
                 case ShrapnelType.HeavyMetal: debrisLifetime = ShrapnelConfig.DebrisLifetimeHeavyMetal.Value; break;
-                case ShrapnelType.Stone:      debrisLifetime = ShrapnelConfig.DebrisLifetimeStone.Value;      break;
-                case ShrapnelType.Wood:       debrisLifetime = ShrapnelConfig.DebrisLifetimeWood.Value;       break;
+                case ShrapnelType.Stone: debrisLifetime = ShrapnelConfig.DebrisLifetimeStone.Value; break;
+                case ShrapnelType.Wood: debrisLifetime = ShrapnelConfig.DebrisLifetimeWood.Value; break;
                 case ShrapnelType.Electronic: debrisLifetime = ShrapnelConfig.DebrisLifetimeElectronic.Value; break;
-                default:                      debrisLifetime = 300f; break;
+                default: debrisLifetime = 300f; break;
             }
         }
 
-        // ── TRIGGER — наступание на debris ──
+        // ── TRIGGER ──
 
-        /// <summary>
-        /// Умная система наступания на debris:
-        /// 1. В воде → безопасно (debris затоплен)
-        /// 2. Обувь → износ ботинка, осколок ломается
-        /// 3. Без обуви → урон ближайшей конечности + застревание
-        /// 4. Броня снижает урон
-        /// </summary>
         private void OnTriggerEnter2D(Collider2D other)
         {
             if (state != State.Debris && state != State.Stuck) return;
@@ -800,11 +903,9 @@ namespace ScavShrapnelMod
 
             if (state != State.Debris) return;
 
-            // Debris в жидкости безопасен
             if (_submerged) return;
 
-            // Обувь защищает
-            bool isStanding = body.transform.position.y > transform.position.y;
+            bool isStanding = body.transform.position.y > _transform.position.y;
             if (isStanding)
             {
                 Item footwear = body.GetWearableBySlotID("feet");
@@ -817,20 +918,18 @@ namespace ScavShrapnelMod
                 }
             }
 
-            // Ближайшая конечность
             Limb target = FindClosestUndamagedLimb(body);
             if (target == null) { BreakShard(); return; }
 
             float armor = target.GetArmorReduction();
+            float decayMult = DamageDecayMultiplier;
 
-            System.Random localRng = new System.Random(unchecked(
-                (int)(transform.position.x * 10000f) ^
-                (int)(transform.position.y * 10000f)));
-
-            target.skinHealth -= localRng.Range(15f, 35f) / armor;
-            target.muscleHealth -= localRng.Range(5f, 15f) / armor;
-            target.bleedAmount += localRng.Range(3f, 12f) / armor;
-            target.pain += 50f / armor;
+            // WHY: Use instance _rng instead of allocating new System.Random per trigger.
+            // Previous code created new System.Random on every OnTriggerEnter2D.
+            target.skinHealth -= _rng.Range(15f, 35f) * decayMult / armor;
+            target.muscleHealth -= _rng.Range(5f, 15f) * decayMult / armor;
+            target.bleedAmount += _rng.Range(3f, 12f) * decayMult / armor;
+            target.pain += 50f * decayMult / armor;
             target.shrapnel++;
 
             target.DamageWearables(0.01f);
@@ -842,12 +941,11 @@ namespace ScavShrapnelMod
             BreakShard();
         }
 
-        /// <summary>Ближайшая неотрублённая конечность к позиции осколка.</summary>
         private Limb FindClosestUndamagedLimb(Body body)
         {
             if (body.limbs == null || body.limbs.Length == 0) return null;
 
-            Vector2 myPos = (Vector2)transform.position;
+            Vector2 myPos = (Vector2)_transform.position;
             Limb closest = null;
             float closestDist = float.MaxValue;
 
@@ -867,23 +965,15 @@ namespace ScavShrapnelMod
             return closest;
         }
 
-        // ── MOUSE INTERACTION — уничтожение кликом ──
+        // ── MOUSE INTERACTION ──
 
-        /// <summary>
-        /// Позволяет игроку уничтожить debris/stuck кликом мыши.
-        /// Дистанция читается из конфига: <see cref="ShrapnelConfig.MaxInteractDistance"/>.
-        /// 
-        /// Ограничение: OnMouseDown создаёт raycast для каждого объекта с этим методом.
-        /// При большом количестве debris это может быть дорого.
-        /// Приемлемо при MaxAliveDebris ≤ 800 (DebrisTracker ограничивает).
-        /// </summary>
         private void OnMouseDown()
         {
             if (state != State.Debris && state != State.Stuck) return;
             if (PlayerCamera.main == null || PlayerCamera.main.body == null) return;
 
             float dist = Vector2.Distance(
-                (Vector2)transform.position,
+                (Vector2)_transform.position,
                 (Vector2)PlayerCamera.main.body.transform.position);
 
             if (dist <= ShrapnelConfig.MaxInteractDistance.Value)
@@ -892,14 +982,11 @@ namespace ScavShrapnelMod
             }
         }
 
-        /// <summary>
-        /// Уничтожает осколок со звуком разбитого стекла.
-        /// </summary>
         private void BreakShard()
         {
             try
             {
-                Sound.Play("glassshard", transform.position, false, true, null, 1f, 1f, false, false);
+                Sound.Play("glassshard", _transform.position, false, true, null, 1f, 1f, false, false);
             }
             catch { }
             Destroy(gameObject);
@@ -907,12 +994,6 @@ namespace ScavShrapnelMod
 
         // ── HEAT SYSTEM ──
 
-        /// <summary>
-        /// Обновляет нагрев осколка.
-        /// 
-        /// Остывание ускоряется при низкой температуре окружения (×2 при &lt;5°C).
-        /// При контакте с водой — мгновенное остывание + звук + пар.
-        /// </summary>
         private void TickHeat(float dt)
         {
             if (Heat <= 0f) return;
@@ -924,7 +1005,6 @@ namespace ScavShrapnelMod
             Heat = Mathf.Max(Heat - cool, 0f);
             sr.color = Color.Lerp(coldColor, ShrapnelVisuals.GetHotColor(), Heat);
 
-            // Обновляем emission только при заметном изменении (>0.05)
             if (Mathf.Abs(Heat - lastEmissionHeat) > 0.05f)
             {
                 lastEmissionHeat = Heat;
@@ -933,18 +1013,17 @@ namespace ScavShrapnelMod
 
             if (Heat <= 0f) ClearHeatAndEmission();
 
-            // Остывание в воде + эффект пара
             if (!cooledInWater && Heat > 0.1f)
             {
                 try
                 {
-                    Vector2Int wPos = WorldGeneration.world.WorldToBlockPos(transform.position);
+                    Vector2Int wPos = WorldGeneration.world.WorldToBlockPos(_transform.position);
                     if (FluidManager.main.WaterInfo(wPos).Item1 > 0f)
                     {
                         cooledInWater = true;
                         _submerged = true;
                         ClearHeatAndEmission();
-                        Sound.Play("fizz", transform.position, false, true, null, 1f, 1f, false, false);
+                        Sound.Play("fizz", _transform.position, false, true, null, 1f, 1f, false, false);
                         SpawnSteamPuff();
                     }
                 }
@@ -952,43 +1031,33 @@ namespace ScavShrapnelMod
             }
         }
 
-        /// <summary>
-        /// Пуф пара при попадании горячего осколка в воду.
-        /// Использует детерминированный RNG из позиции осколка.
-        /// </summary>
         private void SpawnSteamPuff()
         {
-            System.Random rng = new System.Random(unchecked(
-                (int)(transform.position.x * 10000f) ^
-                (int)(transform.position.y * 10000f)));
-
-            int count = rng.Range(3, 6);
+            // WHY: Use instance _rng instead of allocating new System.Random
+            int count = _rng.Range(3, 6);
             for (int i = 0; i < count; i++)
             {
                 GameObject steam = new GameObject("Steam");
-                steam.transform.position = transform.position;
-                steam.transform.localScale = Vector3.one * rng.Range(0.03f, 0.07f);
+                steam.transform.position = _transform.position;
+                steam.transform.localScale = Vector3.one * _rng.Range(0.03f, 0.07f);
 
                 SpriteRenderer ssr = steam.AddComponent<SpriteRenderer>();
                 ssr.sprite = ShrapnelVisuals.GetTriangleSprite(ShrapnelVisuals.TriangleShape.Chunk);
                 ssr.sharedMaterial = ShrapnelVisuals.UnlitMaterial;
                 ssr.sortingOrder = 12;
 
-                float gray = rng.Range(0.8f, 1f);
+                float gray = _rng.Range(0.8f, 1f);
                 Color steamColor = new Color(gray, gray, gray, 0.5f);
 
-                Vector2 velocity = new Vector2(rng.Range(-0.3f, 0.3f), rng.Range(1f, 2.5f));
+                Vector2 velocity = new Vector2(_rng.Range(-0.3f, 0.3f), _rng.Range(1f, 2.5f));
 
                 AshParticle ash = steam.AddComponent<AshParticle>();
-                ash.Initialize(velocity, rng.Range(0.5f, 1.2f), steamColor, rng.Range(0f, 6.28f));
+                ash.Initialize(velocity, _rng.Range(0.5f, 1.2f), steamColor, _rng.Range(0f, 6.28f));
 
-                DebrisTracker.Register(steam);
+                DebrisTracker.RegisterVisual(steam);
             }
         }
 
-        /// <summary>
-        /// Обновляет emission-цвет материала в зависимости от текущего Heat.
-        /// </summary>
         private void UpdateEmission()
         {
             if (Heat > 0.01f)
@@ -1004,7 +1073,6 @@ namespace ScavShrapnelMod
             }
         }
 
-        /// <summary>Обнуляет Heat и убирает emission.</summary>
         private void ClearHeatAndEmission()
         {
             Heat = 0f;
@@ -1012,7 +1080,6 @@ namespace ScavShrapnelMod
             ClearEmission();
         }
 
-        /// <summary>Убирает MaterialPropertyBlock с рендерера.</summary>
         private void ClearEmission()
         {
             sr.SetPropertyBlock(null);

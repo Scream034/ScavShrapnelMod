@@ -4,13 +4,13 @@ using UnityEngine;
 namespace ScavShrapnelMod
 {
     /// <summary>
-    /// Консольные команды для тестирования мода.
+    /// Console commands for mod testing.
     /// 
-    /// Команды:
-    /// - shrapnel_explode [type] [position] [effectsonly] — создать взрыв
-    /// - shrapnel_clear — удалить все осколки
-    /// - shrapnel_debris [count] [force] [type] — спавнить debris
-    /// - shrapnel_status — статус мода
+    /// Commands:
+    /// - shrapnel_explode [type] [position] [effectsonly] — create explosion
+    /// - shrapnel_clear — destroy all shrapnel
+    /// - shrapnel_debris [count] [force] [type] — spawn debris
+    /// - shrapnel_status — mod status
     /// </summary>
     public static class ConsoleCommands
     {
@@ -21,7 +21,7 @@ namespace ScavShrapnelMod
 
         public static void Register()
         {
-            //  КОМАНДА 1: Универсальный взрыв ──
+            //  COMMAND 1: Universal explosion 
             ConsoleScript.Commands.Add(new Command(
                 "shrapnel_explode",
                 "Creates explosion. Args: type (mine/dynamite/turret), position (cursor/player), mode (full/effectsonly)",
@@ -30,21 +30,21 @@ namespace ScavShrapnelMod
                     if (!PlayerCamera.main)
                         throw new Exception("No world loaded!");
 
-                    //  Позиция 
+                    //  Position 
                     Vector2 pos = Camera.main.ScreenToWorldPoint(Input.mousePosition);
                     if (args.Length > 2 && args[2].ToLower() == "player")
                     {
                         pos = PlayerCamera.main.body.transform.position;
                     }
 
-                    //  Тип 
+                    //  Type 
                     string explosionType = "mine";
                     if (args.Length > 1)
                     {
                         explosionType = args[1].ToLower();
                     }
 
-                    //  Режим: full (взрыв + эффекты) или effectsonly (только эффекты) 
+                    //  Mode: full (explosion + effects) or effectsonly (effects only) 
                     bool effectsOnly = false;
                     if (args.Length > 3 && args[3].ToLower() == "effectsonly")
                     {
@@ -81,14 +81,14 @@ namespace ScavShrapnelMod
 
                     if (effectsOnly)
                     {
-                        // Только визуальные эффекты: осколки, пепел, ground debris
-                        // БЕЗ реального взрыва (без урона, без разрушения блоков)
+                        // Effects only: shrapnel, ash, ground debris
+                        // WITHOUT real explosion (no damage, no block destruction)
                         ShrapnelSpawnLogic.TrySpawnFromExplosion(param);
                         LogToConsole($"{explosionType.ToUpper()} EFFECTS ONLY at {pos}");
                     }
                     else
                     {
-                        // Полный взрыв: эффекты + реальный взрыв
+                        // Full explosion: effects + real explosion
                         ShrapnelSpawnLogic.CustomCreateExplosion(param);
                         LogToConsole($"{explosionType.ToUpper()} explosion at {pos}");
                     }
@@ -107,33 +107,27 @@ namespace ScavShrapnelMod
                 }
             ));
 
-            //  КОМАНДА 2: Очистка ──
+            //  COMMAND 2: Clear 
             ConsoleScript.Commands.Add(new Command(
                 "shrapnel_clear",
                 "Destroys all active shrapnel objects.",
                 (args) =>
                 {
-                    ShrapnelProjectile[] all = UnityEngine.Object.FindObjectsOfType<ShrapnelProjectile>();
-                    int count = all.Length;
-                    for (int i = 0; i < all.Length; i++)
-                        UnityEngine.Object.Destroy(all[i].gameObject);
+                    // WHY: Previous implementation used FindObjectsOfType (very expensive O(n) scene scan)
+                    // three times. DebrisTracker.Clear() already tracks everything and is O(n) on tracked
+                    // objects only, plus it properly clears the internal tracking lists.
+                    int physCount = DebrisTracker.PhysicalCount;
+                    int visCount = DebrisTracker.VisualCount;
 
-                    // Также очищаем визуальные и пепел
-                    VisualShrapnel[] visuals = UnityEngine.Object.FindObjectsOfType<VisualShrapnel>();
-                    for (int i = 0; i < visuals.Length; i++)
-                        UnityEngine.Object.Destroy(visuals[i].gameObject);
+                    DebrisTracker.Clear();
 
-                    AshParticle[] ashes = UnityEngine.Object.FindObjectsOfType<AshParticle>();
-                    for (int i = 0; i < ashes.Length; i++)
-                        UnityEngine.Object.Destroy(ashes[i].gameObject);
-
-                    LogToConsole($"Cleared {count} shrapnel + {visuals.Length} visual + {ashes.Length} particles.");
+                    LogToConsole($"Cleared {physCount} physical + {visCount} visual objects via tracker.");
                 },
                 null,
                 new (string, string)[] { }
             ));
 
-            //  КОМАНДА 3: Спавн Debris 
+            //  COMMAND 3: Spawn Debris 
             ConsoleScript.Commands.Add(new Command(
                 "shrapnel_debris",
                 "Spawns debris at cursor. Args: count, force, type",
@@ -190,16 +184,17 @@ namespace ScavShrapnelMod
                 }
             ));
 
-            //  КОМАНДА 4: Статус ─
+            //  COMMAND 4: Status 
             ConsoleScript.Commands.Add(new Command(
                 "shrapnel_status",
                 "Mod status.",
                 (args) =>
                 {
-                    int debrisCount = UnityEngine.Object.FindObjectsOfType<ShrapnelProjectile>().Length;
-                    int visualCount = UnityEngine.Object.FindObjectsOfType<VisualShrapnel>().Length;
-                    int ashCount = UnityEngine.Object.FindObjectsOfType<AshParticle>().Length;
-                    LogToConsole($"v{Plugin.Version} | shrapnel:{debrisCount} visual:{visualCount} particles:{ashCount}");
+                    // WHY: Use DebrisTracker counts instead of FindObjectsOfType.
+                    // FindObjectsOfType scans entire scene — expensive for a debug command.
+                    LogToConsole($"v{Plugin.Version}" +
+                        $" | phys:{DebrisTracker.PhysicalCount} vis:{DebrisTracker.VisualCount}" +
+                        $" | total:{DebrisTracker.Count}");
                 },
                 null,
                 new (string, string)[] { }

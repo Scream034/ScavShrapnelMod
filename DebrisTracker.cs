@@ -1,99 +1,174 @@
-using System.Collections.Generic;
 using UnityEngine;
 
 namespace ScavShrapnelMod
 {
     /// <summary>
-    /// Глобальный трекер живых debris/stuck объектов.
-    /// 
-    /// При превышении лимита (<see cref="ShrapnelConfig.MaxAliveDebris"/>)
-    /// удаляет старейшие объекты (FIFO).
-    /// 
-    /// Предотвращает неограниченный рост GameObject'ов при серии взрывов.
-    /// 
-    /// Реализация: List с удалением с начала.
-    /// Для 800 элементов O(n) RemoveAt(0) приемлемо (~0.01ms).
+    /// Dual tracker for debris objects: separates physical shrapnel from visual particles.
+    ///
+    /// WHY: A single tracker caused physical shrapnel (the pieces that do damage)
+    /// to be instantly destroyed when visual particle count exploded (1000+ ground
+    /// debris per explosion filling the 2000 limit). Now physical shrapnel has
+    /// its own protected pool.
+    ///
+    /// Physical pool: ShrapnelProjectile objects (persistent, deal damage, break blocks).
+    /// Visual pool: AshParticle, VisualShrapnel, ground debris (temporary, no damage).
+    ///
+    /// PERF: Uses ring buffers instead of List for O(1) enqueue/dequeue.
+    /// Previous implementation used List.RemoveAt(0) which is O(n) per eviction.
+    /// With 3000 visual particles, this caused severe frame drops during explosions.
     /// </summary>
     public static class DebrisTracker
     {
-        /// <summary>
-        /// Список живых debris. Новые добавляются в конец, старые удаляются с начала.
-        /// Null-элементы (уничтоженные Unity) очищаются периодически.
-        /// </summary>
-        private static readonly List<GameObject> _alive = new List<GameObject>();
-
-        /// <summary>Счётчик для периодической очистки null-ов.</summary>
-        private static int _cleanupCounter;
-
-        /// <summary>Очистка null каждые N регистраций.</summary>
-        private const int CleanupInterval = 50;
+        // PERF: Ring buffer for O(1) FIFO operations.
+        // Previous List-based approach had O(n) RemoveAt(0) and O(n²) PurgeNulls.
+        private static readonly RingBuffer _physical = new RingBuffer(512);
+        private static readonly RingBuffer _visual = new RingBuffer(4096);
 
         /// <summary>
-        /// Регистрирует новый debris-объект.
-        /// Если лимит превышен — удаляет старейший.
+        /// Registers a physical shrapnel object (ShrapnelProjectile component).
+        /// This is a protected pool — objects here are never evicted by visual particle overflow.
         /// </summary>
-        /// <param name="obj">GameObject осколка/debris.</param>
+        /// <param name="obj">The physical shrapnel GameObject.</param>
         public static void Register(GameObject obj)
         {
             if (obj == null) return;
 
-            _alive.Add(obj);
-            _cleanupCounter++;
-
-            // Периодическая очистка мёртвых ссылок
-            if (_cleanupCounter >= CleanupInterval)
-            {
-                _cleanupCounter = 0;
-                PurgeNulls();
-            }
-
             int max = ShrapnelConfig.MaxAliveDebris.Value;
-            while (_alive.Count > max)
-            {
-                // Удаляем старейший (с начала списка)
-                GameObject oldest = _alive[0];
-                _alive.RemoveAt(0);
-
-                // Unity может уже уничтожить объект
-                if (oldest != null)
-                    Object.Destroy(oldest);
-            }
+            _physical.Enqueue(obj, max);
         }
 
         /// <summary>
-        /// Удаляет все null-ссылки из списка.
-        /// Unity уничтожает GameObject, но наша ссылка остаётся.
-        /// 
-        /// Итерация с конца для безопасного удаления.
+        /// Registers a visual particle object (AshParticle, VisualShrapnel, ground debris).
+        /// Separate pool from physical shrapnel — overflow here only evicts other visual particles.
         /// </summary>
-        private static void PurgeNulls()
+        /// <param name="obj">The visual particle GameObject.</param>
+        public static void RegisterVisual(GameObject obj)
         {
-            for (int i = _alive.Count - 1; i >= 0; i--)
-            {
-                // Unity overloads == null for destroyed objects
-                if (_alive[i] == null)
-                    _alive.RemoveAt(i);
-            }
+            if (obj == null) return;
+
+            // WHY: Visual limit is higher because particles are lightweight
+            // and self-destruct quickly. A high cap prevents unbounded memory
+            // growth from multiple rapid explosions.
+            int max = ShrapnelConfig.MaxAliveVisualParticles.Value;
+            _visual.Enqueue(obj, max);
         }
 
-        /// <summary>
-        /// Текущее количество отслеживаемых объектов (включая потенциальные null).
-        /// </summary>
-        public static int Count => _alive.Count;
+        /// <summary>Current number of tracked physical shrapnel objects (includes nulls awaiting compaction).</summary>
+        public static int PhysicalCount => _physical.Count;
+
+        /// <summary>Current number of tracked visual particle objects (includes nulls awaiting compaction).</summary>
+        public static int VisualCount => _visual.Count;
+
+        /// <summary>Total number of tracked objects across both pools.</summary>
+        public static int Count => _physical.Count + _visual.Count;
 
         /// <summary>
-        /// Принудительно очищает все отслеживаемые объекты.
-        /// Полезно при перезагрузке сцены.
+        /// Forcibly destroys all tracked objects and clears both pools.
+        /// Useful during scene transitions or cleanup commands.
         /// </summary>
         public static void Clear()
         {
-            for (int i = 0; i < _alive.Count; i++)
+            _physical.DestroyAllAndClear();
+            _visual.DestroyAllAndClear();
+        }
+
+        /// <summary>
+        /// PERF: Ring buffer with O(1) enqueue/dequeue for GameObject tracking.
+        /// Automatically evicts oldest entries when capacity limit is exceeded.
+        /// Skips already-destroyed (null) entries during eviction.
+        /// Grows backing array if needed (doubling strategy).
+        /// </summary>
+        private sealed class RingBuffer
+        {
+            private GameObject[] _buffer;
+            private int _head;
+            private int _tail;
+            private int _count;
+
+            /// <summary>Number of slots currently occupied (includes potential nulls from Unity destruction).</summary>
+            public int Count => _count;
+
+            public RingBuffer(int initialCapacity)
             {
-                if (_alive[i] != null)
-                    Object.Destroy(_alive[i]);
+                _buffer = new GameObject[initialCapacity];
+                _head = 0;
+                _tail = 0;
+                _count = 0;
             }
-            _alive.Clear();
-            _cleanupCounter = 0;
+
+            /// <summary>
+            /// Enqueues an object. If count exceeds maxAlive, dequeues and destroys oldest entries.
+            /// </summary>
+            /// <param name="obj">GameObject to track.</param>
+            /// <param name="maxAlive">Maximum number of alive objects allowed.</param>
+            public void Enqueue(GameObject obj, int maxAlive)
+            {
+                // Grow if backing array is full
+                if (_count == _buffer.Length)
+                    Grow();
+
+                _buffer[_tail] = obj;
+                _tail = (_tail + 1) % _buffer.Length;
+                _count++;
+
+                // Evict oldest until we're under the cap
+                while (_count > maxAlive)
+                {
+                    GameObject oldest = _buffer[_head];
+                    _buffer[_head] = null;
+                    _head = (_head + 1) % _buffer.Length;
+                    _count--;
+
+                    // WHY: Unity null check — object may have self-destructed
+                    if (oldest != null)
+                        Object.Destroy(oldest);
+                }
+            }
+
+            /// <summary>
+            /// Destroys all tracked objects and resets the buffer.
+            /// </summary>
+            public void DestroyAllAndClear()
+            {
+                for (int i = 0; i < _buffer.Length; i++)
+                {
+                    if (_buffer[i] != null)
+                        Object.Destroy(_buffer[i]);
+                    _buffer[i] = null;
+                }
+
+                _head = 0;
+                _tail = 0;
+                _count = 0;
+            }
+
+            /// <summary>
+            /// PERF: Doubles backing array capacity, preserving FIFO order.
+            /// Called rarely — only when concurrent alive objects exceed initial capacity.
+            /// </summary>
+            private void Grow()
+            {
+                int newCapacity = _buffer.Length * 2;
+                var newBuffer = new GameObject[newCapacity];
+
+                // PERF: Compact during grow — skip nulls to reclaim dead slots
+                int writeIndex = 0;
+                for (int i = 0; i < _count; i++)
+                {
+                    int idx = (_head + i) % _buffer.Length;
+                    GameObject obj = _buffer[idx];
+                    // WHY: Skip Unity-destroyed objects during compaction
+                    if (obj != null)
+                    {
+                        newBuffer[writeIndex++] = obj;
+                    }
+                }
+
+                _buffer = newBuffer;
+                _head = 0;
+                _tail = writeIndex;
+                _count = writeIndex;
+            }
         }
     }
 }

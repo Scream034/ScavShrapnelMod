@@ -1,58 +1,90 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 
 namespace ScavShrapnelMod
 {
     /// <summary>
-    /// Статический кэш спрайтов, материалов и цветов для осколков.
-    /// 
-    /// Спрайты генерируются процедурно при первом запросе и кэшируются навсегда.
-    /// Материалы создаются один раз (3 штуки: lit, unlit, trail).
-    /// 
-    /// Производительность: один DrawCall на батч одинаковых материалов.
+    /// Static cache of sprites, materials, and colors for shrapnel.
+    ///
+    /// Sprites are procedurally generated on first request and cached forever.
+    /// Materials are created once with robust fallback chain.
+    ///
+    /// Initialization order:
+    /// 1. Try named shaders via Shader.Find
+    /// 2. Fallback: clone material from existing SpriteRenderer in scene
+    /// 3. If all fail: return null, spawn methods skip gracefully
     /// </summary>
     public static class ShrapnelVisuals
     {
-        //  Кэш спрайтов 
         private static readonly Dictionary<string, Sprite> _spriteCache = new Dictionary<string, Sprite>();
 
-        //  Кэш материалов ─
         private static Material _litMaterial;
         private static Material _unlitMaterial;
         private static Material _trailMaterial;
 
-        //  MATERIALS
+        // WHY: Track initialization attempts to avoid spamming FindObjectOfType
+        private static bool _litAttempted;
+        private static bool _unlitAttempted;
+
+        /// <summary>
+        /// Pre-warms all materials and sprite cache.
+        /// Call when game is fully loaded to prevent first-explosion failures.
+        /// Safe to call multiple times - no-op if already warmed.
+        /// </summary>
+        public static void PreWarm()
+        {
+            try
+            {
+                // Force material creation - these getters handle their own null checks
+                var lit = LitMaterial;
+                var unlit = UnlitMaterial;
+                var trail = TrailMaterial;
+
+                // Pre-generate all sprite shapes
+                for (int i = 0; i < 6; i++)
+                {
+                    try
+                    {
+                        GetTriangleSprite((TriangleShape)i);
+                    }
+                    catch (Exception e)
+                    {
+                        Plugin.Log.LogWarning($"[Visuals] Sprite {i} failed: {e.Message}");
+                    }
+                }
+
+                Plugin.Log.LogInfo($"[Visuals] PreWarm complete. Lit:{lit != null}" +
+                                   $" Unlit:{unlit != null} Trail:{trail != null}");
+            }
+            catch (Exception e)
+            {
+                Plugin.Log.LogWarning($"[Visuals] PreWarm exception: {e.Message}");
+            }
+        }
+
+        // ── MATERIALS ──
 
         public static Material LitMaterial
         {
             get
             {
-                if (_litMaterial == null)
+                if (_litMaterial != null) return _litMaterial;
+
+                _litMaterial = TryCreateMaterial(
+                    "LitMaterial",
+                    "Universal Render Pipeline/2D/Sprite-Lit-Default",
+                    "Sprites/Lit",
+                    "Sprites/Default");
+
+                // WHY: Shader.Find can fail early in game lifecycle.
+                // Fallback: clone material from an existing SpriteRenderer in the scene.
+                if (_litMaterial == null && !_litAttempted)
                 {
-                    string[] litShaders =
-                    {
-                        "Universal Render Pipeline/2D/Sprite-Lit-Default",
-                        "Sprites/Lit",
-                        "Sprites/Default"
-                    };
-
-                    foreach (string name in litShaders)
-                    {
-                        Shader s = Shader.Find(name);
-                        if (s != null)
-                        {
-                            _litMaterial = new Material(s);
-                            Plugin.Log.LogInfo($"[Visuals] LitMaterial using: {name}");
-                            break;
-                        }
-                    }
-
-                    if (_litMaterial == null)
-                    {
-                        _litMaterial = new Material(Shader.Find("Sprites/Default"));
-                        Plugin.Log.LogWarning("[Visuals] LitMaterial fallback to Sprites/Default");
-                    }
+                    _litAttempted = true;
+                    _litMaterial = TryCloneFromScene("LitMaterial");
                 }
+
                 return _litMaterial;
             }
         }
@@ -61,31 +93,19 @@ namespace ScavShrapnelMod
         {
             get
             {
-                if (_unlitMaterial == null)
+                if (_unlitMaterial != null) return _unlitMaterial;
+
+                _unlitMaterial = TryCreateMaterial(
+                    "UnlitMaterial",
+                    "Universal Render Pipeline/2D/Sprite-Unlit-Default",
+                    "Sprites/Default");
+
+                if (_unlitMaterial == null && !_unlitAttempted)
                 {
-                    string[] unlitShaders =
-                    {
-                        "Universal Render Pipeline/2D/Sprite-Unlit-Default",
-                        "Sprites/Default"
-                    };
-
-                    foreach (string name in unlitShaders)
-                    {
-                        Shader s = Shader.Find(name);
-                        if (s != null)
-                        {
-                            _unlitMaterial = new Material(s);
-                            Plugin.Log.LogInfo($"[Visuals] UnlitMaterial using: {name}");
-                            break;
-                        }
-                    }
-
-                    if (_unlitMaterial == null)
-                    {
-                        _unlitMaterial = new Material(Shader.Find("Sprites/Default"));
-                        Plugin.Log.LogWarning("[Visuals] UnlitMaterial fallback to Sprites/Default");
-                    }
+                    _unlitAttempted = true;
+                    _unlitMaterial = TryCloneFromScene("UnlitMaterial");
                 }
+
                 return _unlitMaterial;
             }
         }
@@ -94,27 +114,93 @@ namespace ScavShrapnelMod
         {
             get
             {
+                if (_trailMaterial != null) return _trailMaterial;
+
+                _trailMaterial = TryCreateMaterial(
+                    "TrailMaterial",
+                    "Sprites/Default",
+                    "Legacy Shaders/Particles/Alpha Blended");
+
                 if (_trailMaterial == null)
-                {
-                    Shader s = Shader.Find("Sprites/Default");
-                    if (s == null) s = Shader.Find("Legacy Shaders/Particles/Alpha Blended");
-                    _trailMaterial = new Material(s);
-                    Plugin.Log.LogInfo("[Visuals] TrailMaterial initialized");
-                }
+                    _trailMaterial = TryCloneFromScene("TrailMaterial");
+
                 return _trailMaterial;
             }
         }
 
-        //  TRIANGLE SPRITES
+        /// <summary>
+        /// Tries to create a Material from a list of shader names.
+        /// Returns null if all shaders fail — never throws.
+        /// </summary>
+        private static Material TryCreateMaterial(string label, params string[] shaderNames)
+        {
+            for (int i = 0; i < shaderNames.Length; i++)
+            {
+                try
+                {
+                    Shader s = Shader.Find(shaderNames[i]);
+                    if (s != null)
+                    {
+                        Material mat = new Material(s);
+                        Plugin.Log.LogInfo($"[Visuals] {label} using: {shaderNames[i]}");
+                        return mat;
+                    }
+                }
+                catch (System.Exception e)
+                {
+                    Plugin.Log.LogWarning($"[Visuals] {label} shader '{shaderNames[i]}' failed: {e.Message}");
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Fallback: finds any SpriteRenderer in the scene and clones its material.
+        /// Guarantees a working material if the game has any sprites loaded.
+        /// </summary>
+        private static Material TryCloneFromScene(string label)
+        {
+            try
+            {
+                SpriteRenderer sr = UnityEngine.Object.FindObjectOfType<SpriteRenderer>();
+                if (sr != null && sr.sharedMaterial != null && sr.sharedMaterial.shader != null)
+                {
+                    Material cloned = new Material(sr.sharedMaterial.shader);
+                    Plugin.Log.LogInfo($"[Visuals] {label} cloned from scene SpriteRenderer");
+                    return cloned;
+                }
+            }
+            catch (System.Exception e)
+            {
+                Plugin.Log.LogWarning($"[Visuals] {label} scene clone failed: {e.Message}");
+            }
+
+            Plugin.Log.LogWarning($"[Visuals] {label}: all init methods failed, will retry next call");
+            return null;
+        }
+
+        /// <summary>
+        /// Resets material cache. Forces re-initialization on next access.
+        /// Call on scene reload when materials may become invalid.
+        /// </summary>
+        public static void ResetMaterials()
+        {
+            _litMaterial = null;
+            _unlitMaterial = null;
+            _trailMaterial = null;
+            _litAttempted = false;
+            _unlitAttempted = false;
+            Plugin.Log.LogInfo("[Visuals] Materials reset");
+        }
+
+        // ── TRIANGLE SPRITES ──
 
         public enum TriangleShape { Acute, Right, Obtuse, Shard, Needle, Chunk }
 
         /// <summary>
-        /// Процедурно сгенерированный спрайт осколка.
-        /// Кэшируется навсегда. 32×32, FilterMode.Point.
-        /// 
-        /// Оптимизация: batch SetPixels вместо попиксельного SetPixel.
-        /// Снижает время генерации спрайта ~32× (1 вызов вместо 1024).
+        /// Procedurally generated shrapnel sprite. Cached forever.
+        /// 32x32, FilterMode.Point. Batch SetPixels for performance.
         /// </summary>
         public static Sprite GetTriangleSprite(TriangleShape shape)
         {
@@ -129,7 +215,6 @@ namespace ScavShrapnelMod
                 wrapMode = TextureWrapMode.Clamp
             };
 
-            // Batch: заполняем массив целиком, один вызов SetPixels
             Color[] pixels = new Color[size * size];
             Vector2[] verts = GetShapeVertices(shape);
 
@@ -143,7 +228,6 @@ namespace ScavShrapnelMod
                 {
                     if (PointInPolygon(new Vector2(x + 0.5f, y + 0.5f), scaled))
                         pixels[y * size + x] = Color.white;
-                    // else остаётся default Color (0,0,0,0) — прозрачный
                 }
             }
 
@@ -156,9 +240,6 @@ namespace ScavShrapnelMod
             return sprite;
         }
 
-        /// <summary>
-        /// Вершины полигона для каждой формы (нормализованные 0–1).
-        /// </summary>
         private static Vector2[] GetShapeVertices(TriangleShape shape)
         {
             switch (shape)
@@ -207,7 +288,6 @@ namespace ScavShrapnelMod
             }
         }
 
-        /// <summary>Ray-casting point-in-polygon. Работает для любых полигонов.</summary>
         private static bool PointInPolygon(Vector2 p, Vector2[] polygon)
         {
             bool inside = false;
@@ -224,9 +304,9 @@ namespace ScavShrapnelMod
             return inside;
         }
 
-        //  COLORS
+        // ── COLORS ──
 
-        /// <summary>Холодный цвет (Heat = 0) — зависит от материала.</summary>
+        /// <summary>Cold color (Heat = 0) by material type.</summary>
         public static Color GetColdColor(ShrapnelProjectile.ShrapnelType type)
         {
             switch (type)
@@ -240,19 +320,12 @@ namespace ScavShrapnelMod
             }
         }
 
-        /// <summary>Горячий цвет (Heat = 1) — раскалённый оранжевый.</summary>
+        /// <summary>Hot color (Heat = 1) - glowing orange.</summary>
         public static Color GetHotColor() => new Color(1f, 0.55f, 0.1f);
     }
 
-    //  WEIGHT ENUM
-
     /// <summary>
-    /// Весовые категории осколков.
-    /// 
-    /// Hot = лёгкий раскалённый, летит средне, слабый урон.
-    /// Medium = средний, баланс урона и дальности.
-    /// Heavy = тяжёлый, близко но больно. Может сломать кость.
-    /// Massive = огромный кусок, редкий, летальный. Гарантированный перелом.
+    /// Weight categories for shrapnel fragments.
     /// </summary>
     public enum ShrapnelWeight { Hot, Medium, Heavy, Massive }
 }

@@ -5,7 +5,7 @@ using System.Reflection;
 using TMPro;
 using UnityEngine;
 
-namespace BepInExModTemplate.Helpers
+namespace ScavShrapnelMod.Helpers
 {
     internal class CustomResourceManager
     {

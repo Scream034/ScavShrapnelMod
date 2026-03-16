@@ -1,0 +1,8 @@
+<Project>
+    <PropertyGroup>
+        <!-- Меняй только здесь — подтянется везде -->
+        <GameDir>D:\Games\Scav</GameDir>
+        <PluginsDir>$(GameDir)\BepInEx\plugins</PluginsDir>
+        <ManagedDir>$(GameDir)\CasualtiesUnknown_Data\Managed</ManagedDir>
+    </PropertyGroup>
+</Project>

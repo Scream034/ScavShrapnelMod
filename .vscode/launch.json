@@ -1,0 +1,16 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Build & Launch Scav",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "build",
+            "program": "${config:scavGame.path}",
+            "args": [],
+            "cwd": "${config:scavGame.dir}",
+            "stopAtEntry": false,
+            "console": "internalConsole"
+        }
+    ]
+}

@@ -8,7 +8,7 @@ using System.Security.Cryptography;
 using TMPro;
 using UnityEngine;
 
-namespace BepInExModTemplate.Helpers
+namespace ScavShrapnelMod.Helpers
 {
     internal static class FileManager
     {

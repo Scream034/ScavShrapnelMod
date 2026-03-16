@@ -1,0 +1,51 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build",
+            "type": "shell",
+            "command": "dotnet",
+            "args": [
+                "build",
+                "${workspaceFolder}/ScavShrapnelMod.csproj",
+                "/p:Configuration=Debug"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": "$msCompile",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "clear": true
+            }
+        },
+        {
+            "label": "launch-game",
+            "type": "shell",
+            "command": "Start-Process",
+            "args": [
+                "-FilePath",
+                "${config:scavGame.path}"
+            ],
+            "options": {
+                "shell": {
+                    "executable": "powershell",
+                    "args": ["-Command"]
+                }
+            },
+            "presentation": {
+                "reveal": "silent"
+            }
+        },
+        {
+            "label": "build-and-launch",
+            "dependsOn": ["build", "launch-game"],
+            "dependsOrder": "sequence",
+            "presentation": {
+                "reveal": "always"
+            }
+        }
+    ]
+}

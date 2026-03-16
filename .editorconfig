@@ -1,0 +1,5 @@
+root = true
+
+[*.cs]
+# Отключаем предупреждение "private member unused" для Unity lifecycle
+dotnet_diagnostic.IDE0051.severity = none

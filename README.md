@@ -1,5 +1,7 @@
 # Shrapnel Overhaul Mod
 
+![Version](https://img.shields.io/badge/version-0.6.0-blue)
+
 [English](#-english) | [Русский](#-русский)
 
 ---
@@ -8,7 +10,7 @@
 ## 🇬🇧 English
 
 ### About the Mod
-**Shrapnel Overhaul** completely changes how explosions work in the game. Instead of just a simple "bang" and some smoke, explosions now produce hundreds of real, flying fragments. They bounce off metal, get stuck in walls, and can seriously injure your character.
+**Shrapnel Overhaul** completely changes how explosions work in the game. Instead of just a simple "bang" and some smoke, explosions now produce hundreds of real, flying fragments. They bounce off metal, get stuck in walls, and can seriously injure your character. With the latest update, explosions also leave a lasting impact on the environment with lingering smoke, glowing embers, and crater dust!
 
 ### ⚠️ Important Compatibility
 This mod only works with **Scav prototype version 5.1 and newer**. 
@@ -16,15 +18,15 @@ You can download the latest version of the game here:
 👉[https://orsonik.itch.io/scav-prototype](https://orsonik.itch.io/scav-prototype)
 
 **Multiplayer Support:**  
-Fully compatible with the [Co-op Multiplayer Mod](https://github.com/Krokosha666/cas-unk-krokosha-multiplayer-coop) (version **2.1.2** and above). Shrapnel generation is fully synchronized between players!
+Fully compatible with the [Co-op Multiplayer Mod](https://github.com/Krokosha666/cas-unk-krokosha-multiplayer-coop) (version **2.1.2** and above). Shrapnel generation, physics, and visual effects are 100% synchronized between all players!
 
 ### Main Features
 *   **Physical Shrapnel:** Every explosion sends shards of metal, stone, or wood flying in all directions.
+*   **Atmospheric Aftermath:** Massive explosions now leave behind rising smoke columns, glowing embers that rain down, and lingering dust clouds around the crater.
 *   **Watch Your Step:** Fallen fragments stay on the ground. Walking over them barefoot will hurt your feet and cause bleeding! Wear shoes to stay safe.
 *   **Ricochets & Embedding:** Shards can bounce off metallic surfaces or get stuck in limbs and walls.
-*   **Heat System:** Hot metal fragments glow in the dark, cool down over time, and sizzle if they fall into water.
-*   **Gunplay Sparks:** Shooting at metal surfaces now creates small sparks and tiny flying splinters.
-*   **Cleaning Up:** If there is too much debris on the floor, you can simply click on a fragment while standing nearby to crush and remove it.
+*   **Heat & Biome System:** Hot metal fragments glow in the dark and sizzle in water. Explosions in cold biomes create massive steam clouds, while desert explosions kick up extra sand.
+*   **Intense Gunplay:** Shooting at metal surfaces creates bright impact flashes, showers of sparks, and flying metal chips.
 
 ### How to Install
 1.  Make sure you have **BepInEx** installed.
@@ -38,7 +40,7 @@ Fully compatible with the [Co-op Multiplayer Mod](https://github.com/Krokosha666
 ## 🇷🇺 Русский
 
 ### О моде
-**Shrapnel Overhaul** полностью меняет механику взрывов. Теперь это не просто вспышка и дым, а сотни настоящих летящих осколков. Они рикошетят от металла, застревают в стенах и представляют серьезную угрозу для здоровья персонажа.
+**Shrapnel Overhaul** полностью меняет механику взрывов. Теперь это не просто вспышка и дым, а сотни настоящих летящих осколков. Они рикошетят от металла, застревают в стенах и представляют серьезную угрозу для здоровья персонажа. С последним обновлением взрывы также оставляют после себя густые столбы дыма, тлеющие угли и пылевые облака!
 
 ### ⚠️ Важное примечание
 Этот мод работает **только на версии Scav prototype 5.1 и выше**.  
@@ -46,15 +48,15 @@ Fully compatible with the [Co-op Multiplayer Mod](https://github.com/Krokosha666
 👉[https://orsonik.itch.io/scav-prototype](https://orsonik.itch.io/scav-prototype)
 
 **Поддержка мультиплеера:**  
-Мод полностью совместим с [Co-op Multiplayer Mod](https://github.com/Krokosha666/cas-unk-krokosha-multiplayer-coop) (начиная с версии **2.1.2**). Разлет и физика осколков полностью синхронизированы между игроками!
+Мод полностью совместим с [Co-op Multiplayer Mod](https://github.com/Krokosha666/cas-unk-krokosha-multiplayer-coop) (начиная с версии **2.1.2**). Разлет, физика осколков и даже визуальные эффекты на 100% синхронизированы между всеми игроками!
 
 ### Основные возможности
 *   **Физические осколки:** Каждый взрыв создает разлетающиеся частицы металла, камня или дерева с честной физикой.
+*   **Атмосферные последствия:** Мощные взрывы теперь оставляют после себя поднимающиеся столбы дыма, осыпающиеся горящие угли и густую пыль вокруг воронки.
 *   **Смотри под ноги:** Осколки остаются лежать на полу. Если наступить на них босиком, персонаж поранит ноги и получит кровотечение. Носите обувь, чтобы быть в безопасности!
 *   **Рикошеты и застревание:** Осколки могут отскакивать от металлических поверхностей или застревать в стенах и теле персонажа.
-*   **Раскаленный металл:** Горячие осколки светятся в темноте, постепенно остывают, а при попадании в воду шипят и пускают пар.
-*   **Искры при стрельбе:** При попадании пуль в металлические объекты теперь разлетаются искры и мелкая стружка.
-*   **Уборка:** Если мусора на полу стало слишком много, вы можете просто кликнуть мышкой по осколку (находясь рядом), чтобы раздавить и убрать его.
+*   **Температура и биомы:** Горячие осколки светятся в темноте и шипят в воде. Взрывы на холоде создают густой пар, а в пустыне поднимают дополнительные облака песка.
+*   **Сочные перестрелки:** При попадании пуль в металл теперь появляются яркие вспышки, снопы искр и разлетающаяся металлическая стружка.
 
 ### Инструкция по установке
 1.  Убедитесь, что у вас установлен **BepInEx**.

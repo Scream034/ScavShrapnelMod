@@ -966,23 +966,6 @@ namespace ScavShrapnelMod.Projectiles
             return closest;
         }
 
-        // ── MOUSE INTERACTION ──
-
-        private void OnMouseDown()
-        {
-            if (state != State.Debris && state != State.Stuck) return;
-            if (PlayerCamera.main == null || PlayerCamera.main.body == null) return;
-
-            float dist = Vector2.Distance(
-                (Vector2)_transform.position,
-                (Vector2)PlayerCamera.main.body.transform.position);
-
-            if (dist <= ShrapnelConfig.MaxInteractDistance.Value)
-            {
-                BreakShard();
-            }
-        }
-
         private void BreakShard()
         {
             try

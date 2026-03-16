@@ -23,7 +23,7 @@ namespace ScavShrapnelMod
     [BepInPlugin(Guid, Name, Version)]
     public sealed class Plugin : BaseUnityPlugin
     {
-        public const string Guid = "com.user.scavshrapnelmod";
+        public const string Guid = "ScavShrapnelMod";
         public const string Name = "ScavShrapnelMod";
         public const string Version = "0.5.3";
 

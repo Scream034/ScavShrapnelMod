@@ -27,15 +27,15 @@ Works flawlessly no matter what language the game is set to (English, Russian, e
 
 **Multiplayer Synchronization**  
 *A friend steps on a mine, and the flying shrapnel hits you perfectly in sync!*  
-![Multiplayer Mine Explosion](showcase/scav_1.gif)
+![Multiplayer Mine Explosion](showcase/scav_070_1.gif)
 
 **Biome Effects & Footwear Protection**  
 *A turret explodes in the desert kicking up sand. You take a hit, fall onto scattered debris, but your boots save your feet from cuts.*  
-![Desert Turret Explosion & Boots Protection](showcase/scav_2.gif)
+![Desert Turret Explosion & Boots Protection](showcase/scav_070_2.gif)
 
 **Watch Your Step!**  
 *Stepping on that same debris barefoot instantly causes severe bleeding and triggers the injury minigame.*  
-![Barefoot Damage](showcase/scav_3.gif)
+![Barefoot Damage](showcase/scav_070_3.gif)
 
 ### Main Features
 *   **Physical Shrapnel:** Every explosion sends shards of metal, stone, or wood flying in all directions with perfect center-outward symmetry. Ground-placed mines correctly form an upward cone of destruction.
@@ -76,15 +76,15 @@ Works flawlessly no matter what language the game is set to (English, Russian, e
 
 **Синхронизация в мультиплеере**  
 *Друг наступает на мину, и разлетающийся осколок честно прилетает прямо в вас!*  
-![Взрыв мины в мультиплеере](showcase/scav_1.gif)
+![Взрыв мины в мультиплеере](showcase/scav_070_1.gif)
 
 **Реакция биома и защита ботинок**  
 *Взрыв турели в пустыне поднимает песок. Осколок сбивает вас с ног прямо на мелкий мусор, но плотные ботинки полностью спасают ноги от порезов.*  
-![Взрыв турели и защита ботинок](showcase/scav_2.gif)
+![Взрыв турели и защита ботинок](showcase/scav_070_2.gif)
 
 **Смотрите под ноги!**  
 *Специально наступаем на те же осколки, но уже босиком — получаем глубокий порез, кровотечение и мини-игру с лечением.*  
-![Урон босиком](showcase/scav_3.gif)
+![Урон босиком](showcase/scav_070_3.gif)
 
 ### Основные возможности
 *   **Физические осколки:** Каждый взрыв создает разлетающиеся частицы с идеальной симметрией. Мины, лежащие на полу, теперь корректно формируют конус осколков, направленный вверх.

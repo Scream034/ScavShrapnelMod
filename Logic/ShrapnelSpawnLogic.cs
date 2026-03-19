@@ -58,10 +58,10 @@ namespace ScavShrapnelMod.Logic
         private const int AngularSectors = 8;
         private const float HotFraction = 0.25f;
 
-        /// <summary>Micro fraction increased from 0.10 → 0.12 (+20%).</summary>
+        /// <summary>Micro fraction increased from 0.10 = 0.12 (+20%).</summary>
         private const float MicroFraction = 0.12f;
 
-        /// <summary>Pyrotechnic fraction increased from 0.15 → 0.18 (+20%).</summary>
+        /// <summary>Pyrotechnic fraction increased from 0.15 = 0.18 (+20%).</summary>
         private const float PyrotechnicFraction = 0.18f;
 
         private const int BottomConeStartSector = 5;

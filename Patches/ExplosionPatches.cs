@@ -89,7 +89,7 @@ namespace ScavShrapnelMod.Patches
         ///
         /// 3. SINGLEPLAYER:
         ///    - Full replacement (return false)
-        ///    - Pre → RunVanillaExplosion → Post
+        ///    - Pre = RunVanillaExplosion = Post
         /// </summary>
         public static bool Prefix(ExplosionParams param)
         {

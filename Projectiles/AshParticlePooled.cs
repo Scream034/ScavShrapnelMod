@@ -17,12 +17,12 @@ namespace ScavShrapnelMod.Projectiles
     /// PERF vs original AshParticle:
     ///   - No Instantiate/Destroy (reuse via SetActive)
     ///   - No GetComponent (references cached at pool creation)
-    ///   - Decomposed Vector2/Color → float fields (no struct copies)
-    ///   - PoolIndex stored in particle → O(1) pool operations
+    ///   - Decomposed Vector2/Color = float fields (no struct copies)
+    ///   - PoolIndex stored in particle = O(1) pool operations
     ///   - Frame-staggered Perlin (every 3 frames, ×3 compensation)
     ///
     /// Lifecycle:
-    ///   Pool.Get() → SetActive(true) → Initialize() → Update → Recycle() → SetActive(false) → Pool
+    ///   Pool.Get() = SetActive(true) = Initialize() = Update = Recycle() = SetActive(false) = Pool
     /// </summary>
     public sealed class AshParticlePooled : MonoBehaviour
     {
@@ -142,8 +142,8 @@ namespace ScavShrapnelMod.Projectiles
             }
 
             float dt = Time.deltaTime;
-            float t = _life / _maxLife;     // 1→0
-            float age = 1f - t;              // 0→1
+            float t = _life / _maxLife;     // 1=0
+            float age = 1f - t;              // 0=1
 
             //  Gravity
             _velY -= _gravity * dt;

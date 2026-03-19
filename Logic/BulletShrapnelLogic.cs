@@ -4,6 +4,7 @@ using ScavShrapnelMod.Helpers;
 using ScavShrapnelMod.Core;
 using ScavShrapnelMod.Effects;
 using ScavShrapnelMod.Projectiles;
+using ScavShrapnelMod.Net;
 
 namespace ScavShrapnelMod.Logic
 {
@@ -56,6 +57,10 @@ namespace ScavShrapnelMod.Logic
         /// </summary>
         public static void TrySpawnFromBullet(FireInfo info)
         {
+            // MULTIPLAYER: Only server spawns physics fragments.
+            // Client receives visual mirrors via ShrapnelNetSync.
+            if (!MultiplayerHelper.ShouldSpawnPhysicsShrapnel) return;
+
             try
             {
                 int frame = Time.frameCount;
@@ -174,6 +179,7 @@ namespace ScavShrapnelMod.Logic
             proj.CanBreak = false;
             proj.Damage = rng.Range(1f, 5f);
             proj.BleedAmount = rng.Range(0.3f, 1.5f);
+            proj.Seed = rng.Next();
 
             Vector2 spread = rng.InsideUnitCircle() * 0.6f;
             Vector2 dir = (hitNormal + spread).normalized;
@@ -188,6 +194,7 @@ namespace ScavShrapnelMod.Logic
             rb.AddTorque(rng.Range(-200f, 200f));
 
             DebrisTracker.Register(obj);
+            ShrapnelNetSync.ServerRegister(proj);
         }
     }
 }

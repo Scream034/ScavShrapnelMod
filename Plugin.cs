@@ -5,7 +5,9 @@ using HarmonyLib;
 using UnityEngine;
 using ScavShrapnelMod.Core;
 using ScavShrapnelMod.Logic;
+using ScavShrapnelMod.Net;
 using ScavShrapnelMod.Patches;
+using ScavShrapnelMod.Helpers;
 
 namespace ScavShrapnelMod
 {
@@ -14,7 +16,7 @@ namespace ScavShrapnelMod
     {
         public const string Guid = "ScavShrapnelMod";
         public const string Name = "ScavShrapnelMod";
-        public const string Version = "0.8.0";
+        public const string Version = "0.8.1";
 
         internal static BepInEx.Logging.ManualLogSource Log;
         internal static bool CommandsRegistered;
@@ -33,7 +35,7 @@ namespace ScavShrapnelMod
             Logger.LogInfo("╚═══════════════════════════════════════╝");
 
             ShrapnelConfig.Bind(Config);
-            Helpers.CustomResourceManager.Logger = Logger;
+            CustomResourceManager.Logger = Logger;
 
             _harmony = new Harmony(Guid);
             ApplyPatches();
@@ -55,7 +57,7 @@ namespace ScavShrapnelMod
                     var prefixMethod = AccessTools.Method(
                         typeof(CreateExplosionPatch),
                         nameof(CreateExplosionPatch.Prefix));
-                    
+
                     var postfixMethod = AccessTools.Method(
                         typeof(CreateExplosionPatch),
                         nameof(CreateExplosionPatch.Postfix));
@@ -145,6 +147,9 @@ namespace ScavShrapnelMod
                 ShrapnelSpawnLogic.ResetThrottle();
                 VisualsWarmed = true;
 
+                if (MultiplayerHelper.IsNetworkRunning)
+                    ShrapnelNetSync.Initialize();
+
                 Log.LogInfo($"[Init] Warmed." +
                     $" AshPools={AshParticlePoolManager.Initialized}" +
                     $" SparkPool={ParticlePoolManager.Initialized}");
@@ -157,6 +162,7 @@ namespace ScavShrapnelMod
 
         internal static void OnWorldLoad()
         {
+            ShrapnelNetSync.Shutdown();
             VisualsWarmed = false;
             ShrapnelVisuals.ResetMaterials();
             AshParticlePoolManager.Shutdown();

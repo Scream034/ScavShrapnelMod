@@ -8,8 +8,8 @@ namespace ScavShrapnelMod.Helpers
     /// No hard dependency — shrapnel mod works with or without MP mod.
     ///
     /// FIELD vs PROPERTY:
-    ///   is_client                  → public static field (GetField works)
-    ///   network_system_is_running  → public static property (GetProperty needed!)
+    ///   is_client                  = public static field (GetField works)
+    ///   network_system_is_running  = public static property (GetProperty needed!)
     ///     Compiler generates backing field named
     ///     &lt;network_system_is_running&gt;k__BackingField which is private.
     ///     GetField("network_system_is_running") returns null.

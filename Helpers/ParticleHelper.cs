@@ -145,10 +145,10 @@ namespace ScavShrapnelMod.Helpers
     /// <summary>
     /// Central particle spawning router. Routes to appropriate pool system:
     ///
-    ///   • SpawnLit/SpawnUnlit → AshParticlePoolManager (complex physics, zero-GC)
+    ///   • SpawnLit/SpawnUnlit = AshParticlePoolManager (complex physics, zero-GC)
     ///     Material: Sprite-Lit/Unlit-Default, reacts to URP 2D lighting.
     ///
-    ///   • SpawnSpark* → ParticlePoolManager.Spark (GPU-batched via Unity ParticleSystem)
+    ///   • SpawnSpark* = ParticlePoolManager.Spark (GPU-batched via Unity ParticleSystem)
     ///     Material: Particles/Unlit additive, stretch billboard for trails.
     ///
     /// BACKWARD COMPATIBILITY:
@@ -163,9 +163,7 @@ namespace ScavShrapnelMod.Helpers
     /// </summary>
     public static class ParticleHelper
     {
-        // ──────────────────────────────────────────────────────
         //  MATERIAL PROPERTY BLOCK CACHE (for hot shrapnel glow)
-        // ──────────────────────────────────────────────────────
 
         private static MaterialPropertyBlock _mpb;
         private static int _emissionId = -1;
@@ -178,9 +176,7 @@ namespace ScavShrapnelMod.Helpers
         private static MaterialPropertyBlock MPB =>
             _mpb ?? (_mpb = new MaterialPropertyBlock());
 
-        // ──────────────────────────────────────────────────────
         //  SPARK RENDERING CONFIGURATIONS
-        // ──────────────────────────────────────────────────────
 
         /// <summary>
         /// Minimum visible spark size in world units.
@@ -196,10 +192,8 @@ namespace ScavShrapnelMod.Helpers
         /// </summary>
         private const float SparkSizeMultiplier = 3f;
 
-        // ──────────────────────────────────────────────────────
         //  LIT PARTICLES (debris, dust, smoke, ash, steam)
         //  Material: Sprite-Lit-Default — reacts to URP 2D lighting
-        // ──────────────────────────────────────────────────────
 
         /// <summary>
         /// Core lit emitter. Initializes pools lazily via EnsureReady().
@@ -228,10 +222,8 @@ namespace ScavShrapnelMod.Helpers
             float perlinSeed, in EmissionParams emission, float startDelay = 0f)
             => SpawnLit(pos, visual, physics, perlinSeed, startDelay);
 
-        // ──────────────────────────────────────────────────────
         //  UNLIT PARTICLES (embers, fire, glow, burning chunks)
         //  Material: Sprite-Unlit-Default — self-illuminated appearance
-        // ──────────────────────────────────────────────────────
 
         /// <summary>
         /// Core unlit emitter. Initializes pools lazily via EnsureReady().
@@ -260,10 +252,8 @@ namespace ScavShrapnelMod.Helpers
             float perlinSeed, in EmissionParams emission, float startDelay = 0f)
             => SpawnUnlit(pos, visual, physics, perlinSeed, startDelay);
 
-        // ──────────────────────────────────────────────────────
         //  SPARKS (GPU-batched via Unity ParticleSystem)
         //  RenderMode.Stretch for trail-like appearance
-        // ──────────────────────────────────────────────────────
 
         /// <summary>
         /// Core spark emitter. Scales up small sprite sizes to world-unit visibility.
@@ -294,9 +284,7 @@ namespace ScavShrapnelMod.Helpers
             in EmissionParams emission = default)
             => SpawnSpark(pos, visual, spark);
 
-        // ──────────────────────────────────────────────────────
         //  LEGACY API — renamed method forwards
-        // ──────────────────────────────────────────────────────
 
         public static GameObject SpawnAshParticle(string name, Vector2 pos,
             in VisualParticleParams visual, in AshPhysicsParams physics, float seed)
@@ -312,9 +300,7 @@ namespace ScavShrapnelMod.Helpers
             float seed, float delay, Material overrideMaterial)
             => SpawnLit(pos, visual, physics, seed, delay);
 
-        // ──────────────────────────────────────────────────────
         //  BURST EMISSION (circle of particles around center)
-        // ──────────────────────────────────────────────────────
 
         /// <summary>Spawns a burst of particles in a circle around center.</summary>
         public static void SpawnBurst(string prefix, Vector2 center, int count,
@@ -342,9 +328,7 @@ namespace ScavShrapnelMod.Helpers
             System.Random rng)
             => SpawnBurst(prefix, center, count, radius, vf, pf, rng, false);
 
-        // ──────────────────────────────────────────────────────
         //  CORE POOL EMISSION (private helper)
-        // ──────────────────────────────────────────────────────
 
         /// <summary>
         /// Emits a single particle from the specified AshParticlePool.
@@ -373,9 +357,7 @@ namespace ScavShrapnelMod.Helpers
             );
         }
 
-        // ──────────────────────────────────────────────────────
         //  EMISSION GLOW FOR PHYSICS SHRAPNEL (SpriteRenderer)
-        // ──────────────────────────────────────────────────────
 
         /// <summary>
         /// Applies emission glow to a SpriteRenderer via MaterialPropertyBlock.

@@ -38,9 +38,6 @@ namespace ScavShrapnelMod
             _harmony = new Harmony(Guid);
             ApplyPatches();
             CreateCommandRegistrar();
-
-            // WHY: Create the deferred runner early so it's ready for explosions
-            DeferredExplosionRunner.EnsureExists();
         }
 
         private void ApplyPatches()
@@ -58,10 +55,21 @@ namespace ScavShrapnelMod
                     var prefixMethod = AccessTools.Method(
                         typeof(CreateExplosionPatch),
                         nameof(CreateExplosionPatch.Prefix));
-        
+                    
+                    var postfixMethod = AccessTools.Method(
+                        typeof(CreateExplosionPatch),
+                        nameof(CreateExplosionPatch.Postfix));
+
                     _harmony.Patch(
                         targetMethod,
-                        prefix: new HarmonyMethod(prefixMethod) { priority = Priority.First });
+                        prefix: new HarmonyMethod(prefixMethod)
+                        {
+                            priority = Priority.Low
+                        },
+                        postfix: new HarmonyMethod(postfixMethod)
+                        {
+                            priority = Priority.Last
+                        });
 
                     Logger.LogInfo("[Patch] ✓ Layer 1: WorldGeneration.CreateExplosion");
                 }
@@ -132,10 +140,14 @@ namespace ScavShrapnelMod
             try
             {
                 ShrapnelVisuals.PreWarm();
+                AshParticlePoolManager.Initialize();
                 ParticlePoolManager.Initialize();
                 ShrapnelSpawnLogic.ResetThrottle();
                 VisualsWarmed = true;
-                Log.LogInfo($"[Init] Visuals + ParticlePools warmed. Pools={ParticlePoolManager.Initialized}");
+
+                Log.LogInfo($"[Init] Warmed." +
+                    $" AshPools={AshParticlePoolManager.Initialized}" +
+                    $" SparkPool={ParticlePoolManager.Initialized}");
             }
             catch (Exception e)
             {
@@ -147,6 +159,8 @@ namespace ScavShrapnelMod
         {
             VisualsWarmed = false;
             ShrapnelVisuals.ResetMaterials();
+            AshParticlePoolManager.Shutdown();
+            ParticlePoolManager.Shutdown();
             ShrapnelSpawnLogic.ResetThrottle();
             WarmVisuals();
             ShowConfigResetNotification();

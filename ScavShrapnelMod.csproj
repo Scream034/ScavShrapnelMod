@@ -40,17 +40,17 @@
     <Compile Include="Properties\AssemblyInfo.cs" />
 
     <!-- Core -->
-    <Compile Include="Core\DeferredExplosionRunner.cs" />
+    <Compile Include="Core\AshParticlePool.cs" />
+    <Compile Include="Core\AshParticlePoolManager.cs" />
     <Compile Include="Core\ParticlePool.cs" />
     <Compile Include="Core\ParticlePoolManager.cs" />
     <Compile Include="Core\DebrisTracker.cs" />
     <Compile Include="Core\ShrapnelVisuals.cs" />
     <Compile Include="Core\ShrapnelFactory.cs" />
-
+    
     <!-- Projectiles -->
+    <Compile Include="Projectiles\AshParticlePooled.cs" />
     <Compile Include="Projectiles\ShrapnelProjectile.cs" />
-    <Compile Include="Projectiles\VisualShrapnel.cs" />
-    <Compile Include="Projectiles\AshParticle.cs" />
 
     <!-- Effects -->
     <Compile Include="Effects\ExplosionEffectsLogic.cs" />
@@ -65,6 +65,7 @@
     <!-- Helpers -->
     <Compile Include="Helpers\MathHelper.cs" />
     <Compile Include="Helpers\ParticleHelper.cs" />
+    <Compile Include="Helpers\MultiplayerHelper.cs" />
     <Compile Include="Helpers\RandomExtensions.cs" />
     <Compile Include="Helpers\BlockClassifier.cs" />
     <Compile Include="Helpers\CustomResourceManager.cs" />

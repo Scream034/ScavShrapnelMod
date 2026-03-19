@@ -14,47 +14,47 @@ namespace ScavShrapnelMod.Effects
     ///   All debris uses LitMaterial (dark in dark areas).
     ///   Ground debris is inert matter, not self-luminous.
     ///
-    /// All objects registered in <see cref="DebrisTracker"/>.
+    /// Particle lifecycle managed by AshParticlePoolManager (zero-GC).
     /// </summary>
     public static class GroundDebrisLogic
     {
-        // 
+        //
         //  FACE NORMALS
-        // 
+        //
 
         private static readonly Vector2 NormalUp = Vector2.up;
         private static readonly Vector2 NormalDown = Vector2.down;
         private static readonly Vector2 NormalLeft = Vector2.left;
         private static readonly Vector2 NormalRight = Vector2.right;
 
-        // 
+        //
         //  PRE-ALLOCATED FACE BUFFERS
-        // 
+        //
 
         private static readonly Vector2[] _faceNormals = new Vector2[4];
         private static readonly Vector2[] _facePositions = new Vector2[4];
 
-        // 
+        //
         //  SCAN / WAVE / BUDGET
-        // 
+        //
 
         private const int ScanDownMax = 25;
         private const int ScanUpMax = 20;
         private const float WaveSpeed = 50f;
         private const int MaxTotal = 3000;
 
-        // 
+        //
         //  PER-SURFACE BASE PARTICLE COUNTS
-        // 
+        //
 
         private const int ChunksPerSurface = 3;
         private const int DustPerSurface = 6;
         private const int StreaksPerSurface = 3;
         private const float StreakThreshold = 0.35f;
 
-        // 
+        //
         //  CHUNK PARAMETERS
-        // 
+        //
 
         private const float ChunkScaleMin = 0.12f;
         private const float ChunkScaleMax = 0.28f;
@@ -64,9 +64,9 @@ namespace ScavShrapnelMod.Effects
         private const float ChunkLifeMax = 20f;
         private const float ChunkAlpha = 0.9f;
 
-        // 
+        //
         //  DUST PARAMETERS
-        // 
+        //
 
         private const float DustScaleMin = 0.03f;
         private const float DustScaleMax = 0.2f;
@@ -76,9 +76,9 @@ namespace ScavShrapnelMod.Effects
         private const float DustLifeMax = 40f;
         private const float DustAlpha = 0.55f;
 
-        // 
+        //
         //  STREAK PARAMETERS
-        // 
+        //
 
         private const float StreakScaleMin = 0.06f;
         private const float StreakScaleMax = 0.14f;
@@ -88,9 +88,9 @@ namespace ScavShrapnelMod.Effects
         private const float StreakLifeMax = 1.8f;
         private const float StreakAlpha = 0.85f;
 
-        // 
+        //
         //  AIRWAVE PARAMETERS
-        // 
+        //
 
         private const int AirwavePerColumn = 2;
         private const float AirwaveScaleMin = 0.04f;
@@ -113,9 +113,9 @@ namespace ScavShrapnelMod.Effects
         ///     Called from effects-only mode (-e flag) to show ground debris
         ///     without terrain destruction. Particles may clip into intact blocks.
         /// </summary>
-        /// <param name="epicenter">Explosion world position</param>
-        /// <param name="range">Scan radius</param>
-        /// <param name="rng">Deterministic RNG</param>
+        /// <param name="epicenter">Explosion world position.</param>
+        /// <param name="range">Scan radius.</param>
+        /// <param name="rng">Deterministic RNG.</param>
         /// <param name="preScan">
         /// If true, scans current block layout (effects-only preview).
         /// If false, scans post-destruction crater (normal mode).
@@ -123,10 +123,14 @@ namespace ScavShrapnelMod.Effects
         public static void SpawnFromExplosion(Vector2 epicenter, float range,
             System.Random rng, bool preScan = false)
         {
-            // WHY: Check LitMaterial first, fall back to UnlitMaterial.
-            // If neither exists, skip entirely.
-            if (ShrapnelVisuals.LitMaterial == null
-                && ShrapnelVisuals.UnlitMaterial == null) return;
+            // CRITICAL: Ensure pools are ready before spawning.
+            // This is the lazy-init safety net — if somehow pools aren't
+            // ready by PostExplosion time, initialize them now.
+            if (!AshParticlePoolManager.EnsureReady())
+            {
+                Console.Error("[GroundDebris] AshParticlePoolManager failed to initialize");
+                return;
+            }
 
             try
             {
@@ -274,7 +278,8 @@ namespace ScavShrapnelMod.Effects
                 string mode = preScan ? "PRE-SCAN" : "CRATER";
                 Debug.Log($"[{Plugin.Name}] GroundDebris [{mode}]:" +
                           $" range={range:F0} scan={scanRange}" +
-                          $" surfaces={surfaces} particles={total}");
+                          $" surfaces={surfaces} particles={total}" +
+                          $" poolActive={AshParticlePoolManager.TotalActive}");
             }
         }
 

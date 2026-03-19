@@ -1,34 +1,32 @@
 ﻿using System;
-using System.Reflection;
 using BepInEx;
 using HarmonyLib;
 using UnityEngine;
-using ScavShrapnelMod.Console;
 using ScavShrapnelMod.Core;
 using ScavShrapnelMod.Logic;
+using ScavShrapnelMod.Net;
+using ScavShrapnelMod.Patches;
+using ScavShrapnelMod.Helpers;
 
 namespace ScavShrapnelMod
 {
     /// <summary>
-    /// BepInEx plugin entry point for Shrapnel Overhaul.
-    ///
-    /// Initialization order:
-    /// 1. ShrapnelConfig.Bind — load configuration from .cfg file
-    /// 2. Harmony.PatchAll — apply patches
-    /// 3. ConsoleCommandRegistrar — wait for console readiness
-    /// 4. WorldLoadHook — pre-warm visuals when world is loaded
+    /// BepInEx plugin entry point. Manages Harmony patches, visual warmup,
+    /// console command registration, and world lifecycle.
     /// </summary>
     [BepInPlugin(Guid, Name, Version)]
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "ScavShrapnelMod";
         public const string Name = "ScavShrapnelMod";
-        public const string Version = "0.7.0";
+        public const string Version = "0.8.2";
 
         internal static BepInEx.Logging.ManualLogSource Log;
         internal static bool CommandsRegistered;
         internal static bool VisualsWarmed;
+
         private Harmony _harmony;
+        private static bool _resetNotificationShown;
 
         private void Awake()
         {
@@ -40,48 +38,57 @@ namespace ScavShrapnelMod
             Logger.LogInfo("╚═══════════════════════════════════════╝");
 
             ShrapnelConfig.Bind(Config);
-
-            Helpers.CustomResourceManager.Logger = Logger;
+            GameVersionChecker.Check();
 
             _harmony = new Harmony(Guid);
-            _harmony.PatchAll();
-
-            // WHY: Manual patch for private coroutine method
-            PatchFinishWorldGeneration();
-
+            ApplyPatches();
             CreateCommandRegistrar();
         }
 
-        /// <summary>
-        /// Manually patches the private FinishWorldGeneration coroutine.
-        /// Uses AccessTools to find the MoveNext method of the compiler-generated class.
-        /// </summary>
-        private void PatchFinishWorldGeneration()
+        private void ApplyPatches()
         {
+            // LAYER 1: Manual Harmony patch on CreateExplosion
             try
             {
-                // WHY: IEnumerator methods are compiled into nested classes with MoveNext.
-                // The actual coroutine logic is in <FinishWorldGeneration>d__XX.MoveNext()
-                // We need to find this nested type and patch its MoveNext method.
-                
-                // Alternative approach: patch UpdateChunkVisibility which is called
-                // at the end of FinishWorldGeneration and IS public
-                MethodInfo targetMethod = AccessTools.Method(typeof(WorldGeneration), "UpdateChunkVisibility");
+                var targetMethod = AccessTools.Method(
+                    typeof(WorldGeneration),
+                    nameof(WorldGeneration.CreateExplosion),
+                    new[] { typeof(ExplosionParams) });
+
                 if (targetMethod != null)
                 {
-                    MethodInfo postfix = typeof(WorldLoadPatch).GetMethod("Postfix", 
-                        BindingFlags.Static | BindingFlags.NonPublic);
-                    _harmony.Patch(targetMethod, postfix: new HarmonyMethod(postfix));
-                    Logger.LogInfo("[Patch] WorldGeneration.UpdateChunkVisibility patched for PreWarm");
+                    _harmony.Patch(
+                        targetMethod,
+                        prefix: new HarmonyMethod(
+                            AccessTools.Method(typeof(CreateExplosionPatch),
+                                nameof(CreateExplosionPatch.Prefix)))
+                        { priority = Priority.Low },
+                        postfix: new HarmonyMethod(
+                            AccessTools.Method(typeof(CreateExplosionPatch),
+                                nameof(CreateExplosionPatch.Postfix)))
+                        { priority = Priority.Last });
+
+                    Logger.LogInfo("[Patch] ✓ Layer 1: WorldGeneration.CreateExplosion");
                 }
                 else
                 {
-                    Logger.LogWarning("[Patch] Could not find UpdateChunkVisibility, using fallback");
+                    Logger.LogError("[Patch] ✗ Layer 1: CreateExplosion not found!");
                 }
             }
             catch (Exception e)
             {
-                Logger.LogWarning($"[Patch] FinishWorldGeneration patch failed: {e.Message}");
+                Logger.LogError($"[Patch] ✗ Layer 1: {e.Message}");
+            }
+
+            // LAYERS 2-4: Attribute-based (Destroy hook, TurretUpdate, TurretShoot)
+            try
+            {
+                _harmony.PatchAll();
+                Logger.LogInfo("[Patch] ✓ Layers 2-4: PatchAll complete");
+            }
+            catch (Exception e)
+            {
+                Logger.LogWarning($"[Patch] Layers 2-4 warning: {e.Message}");
             }
         }
 
@@ -89,7 +96,7 @@ namespace ScavShrapnelMod
         {
             try
             {
-                GameObject registrar = new GameObject("ShrapnelMod_Registrar")
+                var registrar = new GameObject("ShrapnelMod_Registrar")
                 {
                     hideFlags = HideFlags.HideAndDontSave
                 };
@@ -107,16 +114,19 @@ namespace ScavShrapnelMod
             _harmony?.UnpatchSelf();
         }
 
+        /// <summary>
+        /// Registers console commands. Called once when ConsoleScript is available.
+        /// </summary>
         internal static void RegisterCommands()
         {
             if (CommandsRegistered) return;
 
             try
             {
-                ConsoleCommands.Register();
+                Console.Register();
                 CommandsRegistered = true;
                 Log.LogInfo("[Console] Commands registered successfully");
-                Debug.Log($"[ShrapnelMod] v{Version} loaded! Type 'help' to see shrapnel_ commands.");
+                Console.Log($"v{Version} loaded! Type 'help' to see shrapnel_ commands.");
             }
             catch (Exception e)
             {
@@ -125,41 +135,67 @@ namespace ScavShrapnelMod
         }
 
         /// <summary>
-        /// Pre-warms visual resources. Safe to call multiple times.
+        /// Initializes visual assets, particle pools, and network sync.
+        /// Safe to call multiple times — subsequent calls are no-ops.
         /// </summary>
         internal static void WarmVisuals()
         {
             if (VisualsWarmed) return;
-
             try
             {
                 ShrapnelVisuals.PreWarm();
+                AshParticlePoolManager.Initialize();
+                ParticlePoolManager.Initialize();
                 ShrapnelSpawnLogic.ResetThrottle();
                 VisualsWarmed = true;
-                Log.LogInfo("[Init] Visuals pre-warmed successfully");
+
+                if (MultiplayerHelper.IsNetworkRunning)
+                    ShrapnelNetSync.Initialize();
+
+                Log.LogInfo($"[Init] Warmed." +
+                    $" AshPools={AshParticlePoolManager.Initialized}" +
+                    $" SparkPool={ParticlePoolManager.Initialized}");
             }
             catch (Exception e)
             {
-                Log.LogWarning($"[Init] PreWarm failed, will retry: {e.Message}");
+                Log.LogError($"[Init] PreWarm FAILED: {e.Message}\n{e.StackTrace}");
             }
         }
 
         /// <summary>
-        /// Resets visual state for new world. Called on world load.
+        /// Full cleanup and re-initialization for world transitions.
+        /// Shuts down network sync, resets materials, restarts pools.
         /// </summary>
         internal static void OnWorldLoad()
         {
+            ShrapnelNetSync.Shutdown();
             VisualsWarmed = false;
             ShrapnelVisuals.ResetMaterials();
+            AshParticlePoolManager.Shutdown();
+            ParticlePoolManager.Shutdown();
             ShrapnelSpawnLogic.ResetThrottle();
             WarmVisuals();
+            ShowConfigResetNotification();
+        }
+
+        private static void ShowConfigResetNotification()
+        {
+            if (_resetNotificationShown) return;
+            _resetNotificationShown = true;
+
+            string notification = ShrapnelConfig.GetResetNotification();
+            if (notification == null) return;
+
+            Log.LogWarning(notification);
+            Console.Log(notification);
         }
     }
 
     /// <summary>
-    /// Waits for ConsoleScript readiness, registers commands.
+    /// Polls for ConsoleScript availability during startup.
+    /// Self-destructs after registering commands or when no longer needed.
     /// </summary>
-    internal class ConsoleCommandRegistrar : MonoBehaviour
+    internal sealed class ConsoleCommandRegistrar : MonoBehaviour
     {
         private void Update()
         {
@@ -179,9 +215,7 @@ namespace ScavShrapnelMod
         }
     }
 
-    /// <summary>
-    /// Backup: intercept ConsoleScript.Start().
-    /// </summary>
+    /// <summary>Fallback: registers commands when ConsoleScript.Start fires.</summary>
     [HarmonyPatch(typeof(ConsoleScript), "Start")]
     internal static class ConsoleStartPatch
     {
@@ -189,58 +223,61 @@ namespace ScavShrapnelMod
         static void Postfix()
         {
             if (ConsoleScript.Commands?.Count > 0 && !Plugin.CommandsRegistered)
-            {
                 Plugin.RegisterCommands();
-            }
         }
     }
 
     /// <summary>
-    /// Pre-warms visual resources when world finishes loading.
-    /// Patched via manual Harmony in Plugin.PatchFinishWorldGeneration.
+    /// Detects world load completion via chunk visibility updates.
+    /// Triggers <see cref="Plugin.OnWorldLoad"/> once per world.
     ///
-    /// WHY: FinishWorldGeneration is a private IEnumerator, can't use attribute.
-    /// UpdateChunkVisibility is called at the end and is accessible.
+    /// Tracks the current world instance to correctly detect world transitions
+    /// (exit to menu → new world) within the same game session.
     /// </summary>
+    [HarmonyPatch(typeof(WorldGeneration), "UpdateChunkVisibility")]
     internal static class WorldLoadPatch
     {
+        /// <summary>
+        /// Cached reference to the world instance we already warmed for.
+        /// When WorldGeneration.world changes (new world), this mismatch
+        /// triggers a fresh OnWorldLoad call.
+        /// </summary>
+        private static WorldGeneration _lastWarmedWorld;
+
         [HarmonyPostfix]
         static void Postfix()
         {
-            // WHY: UpdateChunkVisibility is called frequently during gameplay.
-            // Only warm once per world load, detected by checking if we already
-            // warmed this session AND if generatingWorld just became false.
             try
             {
-                if (WorldGeneration.world != null && 
-                    !WorldGeneration.world.generatingWorld &&
-                    !Plugin.VisualsWarmed)
-                {
-                    Plugin.OnWorldLoad();
-                }
+                var world = WorldGeneration.world;
+                if (world == null || world.generatingWorld)
+                    return;
+
+                // WHY: Comparing instance reference, not bool flag.
+                // On second world load, world is a new instance → mismatch → re-warm.
+                // Prevents the bug where _warmedThisSession stayed true forever.
+                if (world == _lastWarmedWorld)
+                    return;
+
+                _lastWarmedWorld = world;
+                Plugin.OnWorldLoad();
+                Plugin.Log.LogInfo("[WorldLoad] Visuals pre-warmed on world load");
             }
-            catch
-            {
-                // Silently ignore - non-critical
-            }
+            catch { /* guard — runs every frame in postfix */ }
         }
     }
 
-    /// <summary>
-    /// Alternative trigger: when PlayerCamera becomes available.
-    /// Ensures PreWarm happens even if UpdateChunkVisibility patch fails.
-    /// </summary>
+    /// <summary>Ensures visuals are warmed when player camera initializes.</summary>
     [HarmonyPatch(typeof(PlayerCamera), "Start")]
     internal static class PlayerCameraStartPatch
     {
         [HarmonyPostfix]
         static void Postfix()
         {
-            // WHY: PlayerCamera.Start runs once per world load after player spawns.
-            // Good fallback trigger for PreWarm.
             if (!Plugin.VisualsWarmed)
             {
                 Plugin.WarmVisuals();
+                Plugin.Log.LogInfo("[PlayerCamera] Visuals pre-warmed on camera start");
             }
         }
     }

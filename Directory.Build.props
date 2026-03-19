@@ -1,8 +1,11 @@
 <Project>
-    <PropertyGroup>
-        <!-- Меняй только здесь — подтянется везде -->
-        <GameDir>D:\Games\Scav</GameDir>
-        <PluginsDir>$(GameDir)\BepInEx\plugins</PluginsDir>
-        <ManagedDir>$(GameDir)\CasualtiesUnknown_Data\Managed</ManagedDir>
-    </PropertyGroup>
+  <PropertyGroup>
+    <!-- 
+      Default paths — override in ScavShrapnelMod.csproj.user for your machine.
+      These only apply if not already set by user file or environment.
+    -->
+    <GameDir Condition=" '$(GameDir)' == '' ">D:\Games\Scav</GameDir>
+    <PluginsDir Condition=" '$(PluginsDir)' == '' ">$(GameDir)\BepInEx\plugins</PluginsDir>
+    <ManagedDir Condition=" '$(ManagedDir)' == '' ">$(GameDir)\CasualtiesUnknown_Data\Managed</ManagedDir>
+  </PropertyGroup>
 </Project>

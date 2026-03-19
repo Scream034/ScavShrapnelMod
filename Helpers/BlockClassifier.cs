@@ -42,7 +42,7 @@ namespace ScavShrapnelMod.Helpers
     {
         /// <summary>
         /// Classifies a block into a material category.
-        /// Priority: metallic flag → hitsound → stepsound refinement.
+        /// Priority: metallic flag = hitsound = stepsound refinement.
         /// </summary>
         /// <param name="info">BlockInfo from WorldGeneration.GetBlockInfo(). Null-safe.</param>
         /// <returns>MaterialCategory enum value.</returns>

@@ -2,15 +2,14 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Build & Launch Scav",
-            "type": "coreclr",
+            "name": "Build & Launch Game",
+            "type": "node",
             "request": "launch",
-            "preLaunchTask": "build",
-            "program": "${config:scavGame.path}",
-            "args": [],
-            "cwd": "${config:scavGame.dir}",
-            "stopAtEntry": false,
-            "console": "internalConsole"
+            "preLaunchTask": "build-and-launch",
+            "runtimeExecutable": null,
+            "console": "internalConsole",
+            "internalConsoleOptions": "neverOpen"
         }
-    ]
+    ],
+    "compounds": []
 }

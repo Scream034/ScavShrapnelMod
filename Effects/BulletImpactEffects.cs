@@ -19,9 +19,7 @@ namespace ScavShrapnelMod.Effects
     /// </summary>
     public static class BulletImpactEffects
     {
-        // ══════════════════════════════════════════════════════════════════
         //  IMPACT FLASH — Brief bright point at hit location
-        // ══════════════════════════════════════════════════════════════════
 
         /// <summary>
         /// Spawns a brief bright flash at bullet impact point.
@@ -50,9 +48,7 @@ namespace ScavShrapnelMod.Effects
                 rng.Range(0f, 100f), emission);
         }
 
-        // ══════════════════════════════════════════════════════════════════
         //  SPARK SHOWER — Many sparks with varied behavior
-        // ══════════════════════════════════════════════════════════════════
 
         /// <summary>
         /// Spawns a shower of sparks from bullet impact.
@@ -189,9 +185,7 @@ namespace ScavShrapnelMod.Effects
             ParticleHelper.SpawnSparkUnlit("CoreSpark", pos, visual, spark, emission);
         }
 
-        // ══════════════════════════════════════════════════════════════════
         //  METAL CHIPS — Larger debris that scatters and lands
-        // ══════════════════════════════════════════════════════════════════
 
         /// <summary>
         /// Spawns metal chip debris that scatters from impact.
@@ -243,9 +237,7 @@ namespace ScavShrapnelMod.Effects
                 rng.Range(0f, 100f));
         }
 
-        // ══════════════════════════════════════════════════════════════════
         //  MAIN ENTRY POINT
-        // ══════════════════════════════════════════════════════════════════
 
         /// <summary>
         /// Spawns all bullet impact effects for metal hit.
@@ -260,7 +252,7 @@ namespace ScavShrapnelMod.Effects
             }
             catch (Exception e)
             {
-                Plugin.Log.LogWarning($"[BulletImpact] Flash: {e.Message}");
+                Console.Error($"[BulletImpact] Flash: {e.Message}");
             }
 
             try
@@ -269,7 +261,7 @@ namespace ScavShrapnelMod.Effects
             }
             catch (Exception e)
             {
-                Plugin.Log.LogWarning($"[BulletImpact] Sparks: {e.Message}");
+                Console.Error($"[BulletImpact] Sparks: {e.Message}");
             }
 
             try
@@ -278,7 +270,7 @@ namespace ScavShrapnelMod.Effects
             }
             catch (Exception e)
             {
-                Plugin.Log.LogWarning($"[BulletImpact] Chips: {e.Message}");
+                Console.Error($"[BulletImpact] Chips: {e.Message}");
             }
         }
     }

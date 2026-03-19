@@ -10,8 +10,8 @@ namespace ScavShrapnelMod.Effects
     /// Called from ShrapnelSpawnLogic after primary shrapnel spawning.
     ///
     /// Material rules:
-    ///   Smoke/Dust → SpawnLit (inert, dark in shadows)
-    ///   Embers     → SpawnUnlit + emission (self-luminous, always visible)
+    ///   Smoke/Dust = SpawnLit (inert, dark in shadows)
+    ///   Embers     = SpawnUnlit + emission (self-luminous, always visible)
     ///
     /// All spawning routed through <see cref="ParticleHelper"/> for
     /// consistent material selection and future pooling support.
@@ -19,9 +19,7 @@ namespace ScavShrapnelMod.Effects
     /// </summary>
     public static class ExplosionEffectsLogic
     {
-        // ══════════════════════════════════════════════════════════════════
         //  SMOKE COLUMN — Rising dark smoke pillar, persists 10-25 seconds
-        // ══════════════════════════════════════════════════════════════════
 
         /// <summary>
         /// Spawns a rising smoke column from explosion epicenter.
@@ -119,9 +117,7 @@ namespace ScavShrapnelMod.Effects
                 rng.Range(0f, 100f));
         }
 
-        // ══════════════════════════════════════════════════════════════════
         //  FIRE EMBERS — Glowing particles that land and briefly burn
-        // ══════════════════════════════════════════════════════════════════
 
         /// <summary>
         /// Spawns glowing fire embers that arc outward, land, and fade.
@@ -221,9 +217,7 @@ namespace ScavShrapnelMod.Effects
                 rng.Range(0f, 100f), emission);
         }
 
-        // ══════════════════════════════════════════════════════════════════
         //  CRATER DUST — Lingering low particles at epicenter
-        // ══════════════════════════════════════════════════════════════════
 
         /// <summary>
         /// Spawns lingering dust cloud at ground level around crater.
@@ -349,9 +343,7 @@ namespace ScavShrapnelMod.Effects
                 rng.Range(0.25f, 0.35f));
         }
 
-        // ══════════════════════════════════════════════════════════════════
         //  MAIN ENTRY POINT
-        // ══════════════════════════════════════════════════════════════════
 
         /// <summary>
         /// Spawns all advanced explosion effects.
@@ -374,7 +366,7 @@ namespace ScavShrapnelMod.Effects
             }
             catch (Exception e)
             {
-                Plugin.Log.LogWarning($"[Effects] SmokeColumn: {e.Message}");
+                Console.Error($"[Effects] SmokeColumn: {e.Message}");
             }
 
             try
@@ -384,7 +376,7 @@ namespace ScavShrapnelMod.Effects
             }
             catch (Exception e)
             {
-                Plugin.Log.LogWarning($"[Effects] FireEmbers: {e.Message}");
+                Console.Error($"[Effects] FireEmbers: {e.Message}");
             }
 
             try
@@ -394,7 +386,7 @@ namespace ScavShrapnelMod.Effects
             }
             catch (Exception e)
             {
-                Plugin.Log.LogWarning($"[Effects] CraterDust: {e.Message}");
+                Console.Error($"[Effects] CraterDust: {e.Message}");
             }
         }
     }

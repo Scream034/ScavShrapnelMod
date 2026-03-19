@@ -5,8 +5,8 @@ using ScavShrapnelMod.Projectiles;
 namespace ScavShrapnelMod.Helpers
 {
     /// <summary>
-    /// Parameters for visual particle spawning.
-    /// Immutable struct to avoid allocations.
+    /// Immutable parameter structure for particle visual appearance.
+    /// Zero heap allocation — value type passed by ref.
     /// </summary>
     public readonly struct VisualParticleParams
     {
@@ -26,8 +26,15 @@ namespace ScavShrapnelMod.Helpers
     }
 
     /// <summary>
-    /// Parameters for AshParticle physics initialization.
-    /// Immutable struct for clean parameter passing.
+    /// Immutable parameter structure for AshParticle physics simulation.
+    /// Zero heap allocation — value type passed by ref.
+    ///
+    /// Physics model implemented in AshParticlePooled.Update():
+    ///   • Gravity: constant downward acceleration (negative = rises)
+    ///   • Drag: quadratic air resistance F ∝ v²
+    ///   • Turbulence: Perlin noise displacement (frame-staggered every 3 frames)
+    ///   • Wind: constant drift vector, influence grows with age²
+    ///   • ThermalLift: upward force, decays with lifetime t²
     /// </summary>
     public readonly struct AshPhysicsParams
     {
@@ -40,15 +47,10 @@ namespace ScavShrapnelMod.Helpers
         public readonly Vector2 Wind;
         public readonly float ThermalLift;
 
-        public AshPhysicsParams(
-            Vector2 velocity,
-            float lifetime,
-            float gravity = 1.5f,
-            float drag = 0.5f,
-            float turbulenceStrength = 0.5f,
-            float turbulenceScale = 2f,
-            Vector2 wind = default,
-            float thermalLift = 0f)
+        public AshPhysicsParams(Vector2 velocity, float lifetime,
+            float gravity = 1.5f, float drag = 0.5f,
+            float turbulenceStrength = 0.5f, float turbulenceScale = 2f,
+            Vector2 wind = default, float thermalLift = 0f)
         {
             Velocity = velocity;
             Lifetime = lifetime;
@@ -60,119 +62,58 @@ namespace ScavShrapnelMod.Helpers
             ThermalLift = thermalLift;
         }
 
-        /// <summary>Creates params for ground chunks: low gravity, moderate drag.</summary>
+        /// <summary>Ground chunks: low gravity (0.3), moderate drag (0.4).</summary>
         public static AshPhysicsParams Chunk(Vector2 velocity, float lifetime, System.Random rng)
-        {
-            return new AshPhysicsParams(
-                velocity, lifetime,
-                gravity: 0.3f,
-                drag: 0.4f,
-                turbulenceStrength: 0.3f,
-                turbulenceScale: 1.5f,
-                wind: new Vector2(rng.Range(-0.1f, 0.1f), 0f),
-                thermalLift: 0f);
-        }
+            => new AshPhysicsParams(velocity, lifetime, 0.3f, 0.4f, 0.3f, 1.5f,
+                new Vector2(rng.Range(-0.1f, 0.1f), 0f), 0f);
 
-        /// <summary>Creates params for dust: very low gravity, high turbulence, lingers.</summary>
+        /// <summary>Dust cloud: very low gravity (0.15), high drag (0.7), strong turbulence.</summary>
         public static AshPhysicsParams Dust(Vector2 velocity, float lifetime, System.Random rng)
-        {
-            return new AshPhysicsParams(
-                velocity, lifetime,
-                gravity: 0.15f,
-                drag: 0.7f,
-                turbulenceStrength: 0.9f,
-                turbulenceScale: 2.0f,
-                wind: new Vector2(rng.Range(-0.15f, 0.15f), 0f),
-                thermalLift: 0.1f);
-        }
+            => new AshPhysicsParams(velocity, lifetime, 0.15f, 0.7f, 0.9f, 2.0f,
+                new Vector2(rng.Range(-0.15f, 0.15f), 0f), 0.1f);
 
-        /// <summary>Creates params for streaks: fast, low drag, minimal turbulence.</summary>
+        /// <summary>Fast streaks: higher gravity (0.8), minimal drag (0.2), little turbulence.</summary>
         public static AshPhysicsParams Streak(Vector2 velocity, float lifetime)
-        {
-            return new AshPhysicsParams(
-                velocity, lifetime,
-                gravity: 0.8f,
-                drag: 0.2f,
-                turbulenceStrength: 0.15f,
-                turbulenceScale: 1.0f,
-                wind: Vector2.zero,
-                thermalLift: 0f);
-        }
+            => new AshPhysicsParams(velocity, lifetime, 0.8f, 0.2f, 0.15f, 1.0f,
+                Vector2.zero, 0f);
 
-        /// <summary>Creates params for desert dust: very low gravity, long-lasting.</summary>
+        /// <summary>Desert dust: ultra-low gravity (0.08), long-lived, windy drift.</summary>
         public static AshPhysicsParams DesertDust(Vector2 velocity, float lifetime, System.Random rng)
-        {
-            return new AshPhysicsParams(
-                velocity, lifetime,
-                gravity: 0.08f,
-                drag: 0.6f,
-                turbulenceStrength: 0.8f,
-                turbulenceScale: 1.5f,
-                wind: new Vector2(rng.Range(-0.3f, 0.3f), 0f),
-                thermalLift: 0.3f);
-        }
+            => new AshPhysicsParams(velocity, lifetime, 0.08f, 0.6f, 0.8f, 1.5f,
+                new Vector2(rng.Range(-0.3f, 0.3f), 0f), 0.3f);
 
-        /// <summary>Creates params for cold steam: negative gravity (rises), high turbulence.</summary>
+        /// <summary>Cold steam: rises (-0.15 gravity), high turbulence, slight vertical wind.</summary>
         public static AshPhysicsParams ColdSteam(Vector2 velocity, float lifetime, System.Random rng)
-        {
-            return new AshPhysicsParams(
-                velocity, lifetime,
-                gravity: -0.15f,
-                drag: 0.5f,
-                turbulenceStrength: 1.0f,
-                turbulenceScale: 2.5f,
-                wind: new Vector2(rng.Range(-0.2f, 0.2f), 0.1f),
-                thermalLift: 0.5f);
-        }
+            => new AshPhysicsParams(velocity, lifetime, -0.15f, 0.5f, 1.0f, 2.5f,
+                new Vector2(rng.Range(-0.2f, 0.2f), 0.1f), 0.5f);
 
-        /// <summary>Creates params for standard ash with automatic derivation from gravity.</summary>
-        public static AshPhysicsParams Ash(Vector2 velocity, float lifetime, float gravity, System.Random rng)
+        /// <summary>Standard ash: auto-derives drag/turbulence from gravity magnitude.</summary>
+        public static AshPhysicsParams Ash(Vector2 velocity, float lifetime,
+            float gravity, System.Random rng)
         {
             float normalizedGravity = Mathf.Clamp01(Mathf.Abs(gravity) / 2f);
-            return new AshPhysicsParams(
-                velocity, lifetime,
-                gravity: gravity,
-                drag: Mathf.Lerp(0.7f, 0.3f, normalizedGravity),
-                turbulenceStrength: Mathf.Lerp(0.9f, 0.3f, normalizedGravity),
-                turbulenceScale: 2f,
-                wind: new Vector2(rng.Range(-0.2f, 0.2f), 0f),
-                thermalLift: rng.Range(0f, 0.3f));
+            return new AshPhysicsParams(velocity, lifetime, gravity,
+                Mathf.Lerp(0.7f, 0.3f, normalizedGravity),
+                Mathf.Lerp(0.9f, 0.3f, normalizedGravity), 2f,
+                new Vector2(rng.Range(-0.2f, 0.2f), 0f), rng.Range(0f, 0.3f));
         }
 
-        /// <summary>Creates params for smoke: negative gravity (rises), high drag.</summary>
+        /// <summary>Smoke: configurable rising behavior.</summary>
         public static AshPhysicsParams Smoke(Vector2 velocity, float lifetime,
-            float gravity, float drag, float turbulence, Vector2 wind,
-            float thermalLift)
-        {
-            return new AshPhysicsParams(
-                velocity, lifetime,
-                gravity: gravity,
-                drag: drag,
-                turbulenceStrength: turbulence,
-                turbulenceScale: 2f,
-                wind: wind,
-                thermalLift: thermalLift);
-        }
+            float gravity, float drag, float turbulence, Vector2 wind, float thermalLift)
+            => new AshPhysicsParams(velocity, lifetime, gravity, drag, turbulence, 2f,
+                wind, thermalLift);
 
-        /// <summary>Creates params for embers: moderate gravity, low drag.</summary>
+        /// <summary>Embers: configurable glowing debris.</summary>
         public static AshPhysicsParams Ember(Vector2 velocity, float lifetime,
-            float gravity, float drag, float turbulence, Vector2 wind,
-            float thermalLift)
-        {
-            return new AshPhysicsParams(
-                velocity, lifetime,
-                gravity: gravity,
-                drag: drag,
-                turbulenceStrength: turbulence,
-                turbulenceScale: 1f,
-                wind: wind,
-                thermalLift: thermalLift);
-        }
+            float gravity, float drag, float turbulence, Vector2 wind, float thermalLift)
+            => new AshPhysicsParams(velocity, lifetime, gravity, drag, turbulence, 1f,
+                wind, thermalLift);
     }
 
     /// <summary>
-    /// Parameters for VisualShrapnel (transform-driven sparks, no physics).
-    /// Immutable struct for zero-alloc parameter passing.
+    /// Immutable parameter structure for spark emission.
+    /// Used by GPU-batched ParticleSystem spark pool.
     /// </summary>
     public readonly struct SparkParams
     {
@@ -180,394 +121,247 @@ namespace ScavShrapnelMod.Helpers
         public readonly float Speed;
         public readonly float Lifetime;
 
-        public SparkParams(Vector2 direction, float speed, float lifetime)
+        public SparkParams(Vector2 dir, float speed, float life)
         {
-            Direction = direction;
+            Direction = dir;
             Speed = speed;
-            Lifetime = lifetime;
+            Lifetime = life;
         }
     }
 
     /// <summary>
-    /// Parameters for emission glow on particles.
-    /// Null-equivalent: use <see cref="None"/> to skip emission.
+    /// Emission hint structure retained for call-site compatibility.
+    /// No longer affects pooled particle rendering — material color is used instead.
+    /// Call sites may still pass this without breaking.
     /// </summary>
     public readonly struct EmissionParams
     {
-        /// <summary>Emission color (HDR, values > 1 for bloom).</summary>
         public readonly Color Color;
-        /// <summary>Whether to apply emission.</summary>
         public readonly bool Enabled;
-
-        public EmissionParams(Color color)
-        {
-            Color = color;
-            Enabled = true;
-        }
-
-        /// <summary>No emission — skip SetPropertyBlock call.</summary>
+        public EmissionParams(Color color) { Color = color; Enabled = true; }
         public static readonly EmissionParams None = default;
     }
 
     /// <summary>
-    /// Centralized factory for all visual particles.
+    /// Central particle spawning router. Routes to appropriate pool system:
     ///
-    /// Material selection:
-    ///   LitMaterial   — inert debris (rocks, dirt, ash, smoke, metal fragments).
-    ///                   Dark in dark areas. Respects game lighting.
-    ///   UnlitMaterial — self-luminous effects (fire, sparks, embers, tracers).
-    ///                   Always visible regardless of scene lighting.
+    ///   • SpawnLit/SpawnUnlit = AshParticlePoolManager (complex physics, zero-GC)
+    ///     Material: Sprite-Lit/Unlit-Default, reacts to URP 2D lighting.
     ///
-    /// Two particle types:
-    ///   AshParticle     — physics-driven (gravity, drag, turbulence, wind).
-    ///                     For: smoke, dust, debris, ash, embers, steam.
-    ///   VisualShrapnel  — transform-driven (linear movement, no physics).
-    ///                     For: sparks, streak sparks, tracer lines.
+    ///   • SpawnSpark* = ParticlePoolManager.Spark (GPU-batched via Unity ParticleSystem)
+    ///     Material: Particles/Unlit additive, stretch billboard for trails.
     ///
-    /// All spawned particles are registered in <see cref="DebrisTracker"/>.
+    /// BACKWARD COMPATIBILITY:
+    ///   All old method signatures with (string name, ...) and EmissionParams still compile.
+    ///   These parameters are silently ignored — they existed only for legacy GameObject paths.
+    ///   This avoids breaking 60+ call sites across the codebase.
+    ///
+    /// PERFORMANCE GUARANTEES:
+    ///   • Zero GC allocations in steady state (object pooling)
+    ///   • O(1) amortized emit operations
+    ///   • Lazy initialization on first use via EnsureReady()
     /// </summary>
     public static class ParticleHelper
     {
-        // PERF: Cached MaterialPropertyBlock — reused across all spawns.
-        // Safe because Unity copies data during SetPropertyBlock.
-        private static MaterialPropertyBlock _mpb;
-        private static MaterialPropertyBlock MPB =>
-            _mpb ?? (_mpb = new MaterialPropertyBlock());
+        //  MATERIAL PROPERTY BLOCK CACHE (for hot shrapnel glow)
 
+        private static MaterialPropertyBlock _mpb;
         private static int _emissionId = -1;
+
         private static int EmissionColorId =>
             _emissionId == -1
                 ? (_emissionId = Shader.PropertyToID("_EmissionColor"))
                 : _emissionId;
 
-        // ════════════════════════════════════════════════════════════
-        //  ASH PARTICLE SPAWNERS (physics-driven)
-        // ════════════════════════════════════════════════════════════
+        private static MaterialPropertyBlock MPB =>
+            _mpb ?? (_mpb = new MaterialPropertyBlock());
+
+        //  SPARK RENDERING CONFIGURATIONS
 
         /// <summary>
-        /// Spawns a LIT AshParticle that respects the game's 2D lighting.
-        /// Use for: ground debris, ash, smoke, dust, metal chips, wood splinters.
-        /// Dark in dark areas. Falls back to UnlitMaterial if LitMaterial unavailable.
+        /// Minimum visible spark size in world units.
+        /// Below this threshold particles render as sub-pixel and become invisible.
         /// </summary>
-        public static GameObject SpawnLit(
-            string name,
-            Vector2 position,
-            in VisualParticleParams visual,
-            in AshPhysicsParams physics,
-            float perlinSeed,
-            float startDelay = 0f)
+        private const float MinSparkSize = 0.08f;
+
+        /// <summary>
+        /// Size multiplier for ParticleSystem sparks.
+        /// Original Scale values target SpriteRenderer pixel sizes (0.01–0.12 range).
+        /// ParticleSystem Stretch mode uses world units for width, requiring larger base sizes.
+        /// Formula: finalSize = max(scale × multiplier, minSize)
+        /// </summary>
+        private const float SparkSizeMultiplier = 3f;
+
+        //  LIT PARTICLES (debris, dust, smoke, ash, steam)
+        //  Material: Sprite-Lit-Default — reacts to URP 2D lighting
+
+        /// <summary>
+        /// Core lit emitter. Initializes pools lazily via EnsureReady().
+        /// All other lit overloads forward to this implementation.
+        /// </summary>
+        public static GameObject SpawnLit(Vector2 pos,
+            in VisualParticleParams visual, in AshPhysicsParams physics,
+            float perlinSeed, float startDelay = 0f)
         {
-            // WHY: Fallback chain — LitMaterial → UnlitMaterial → null.
-            // Better to see a glowing particle than no particle at all.
-            Material mat = ShrapnelVisuals.LitMaterial
-                        ?? ShrapnelVisuals.UnlitMaterial;
-            return SpawnAshParticleCore(name, position, visual, physics,
-                perlinSeed, startDelay, mat, EmissionParams.None);
+            if (!AshParticlePoolManager.EnsureReady()) return null;
+
+            EmitPooled(pos, visual, physics, perlinSeed, startDelay,
+                AshParticlePoolManager.Lit);
+            return null;
         }
 
+        /// <summary>Backward compat: accepts unused string name parameter.</summary>
+        public static GameObject SpawnLit(string name, Vector2 pos,
+            in VisualParticleParams visual, in AshPhysicsParams physics,
+            float perlinSeed, float startDelay = 0f)
+            => SpawnLit(pos, visual, physics, perlinSeed, startDelay);
+
+        /// <summary>Backward compat: accepts unused name and EmissionParams.</summary>
+        public static GameObject SpawnLit(string name, Vector2 pos,
+            in VisualParticleParams visual, in AshPhysicsParams physics,
+            float perlinSeed, in EmissionParams emission, float startDelay = 0f)
+            => SpawnLit(pos, visual, physics, perlinSeed, startDelay);
+
+        //  UNLIT PARTICLES (embers, fire, glow, burning chunks)
+        //  Material: Sprite-Unlit-Default — self-illuminated appearance
+
         /// <summary>
-        /// Spawns a LIT AshParticle with emission glow.
-        /// Use for: burning chunks, hot debris that glows but still receives lighting.
+        /// Core unlit emitter. Initializes pools lazily via EnsureReady().
+        /// All other unlit overloads forward to this implementation.
         /// </summary>
-        public static GameObject SpawnLit(
-            string name,
-            Vector2 position,
-            in VisualParticleParams visual,
-            in AshPhysicsParams physics,
-            float perlinSeed,
-            in EmissionParams emission,
-            float startDelay = 0f)
+        public static GameObject SpawnUnlit(Vector2 pos,
+            in VisualParticleParams visual, in AshPhysicsParams physics,
+            float perlinSeed, float startDelay = 0f)
         {
-            Material mat = ShrapnelVisuals.LitMaterial
-                        ?? ShrapnelVisuals.UnlitMaterial;
-            return SpawnAshParticleCore(name, position, visual, physics,
-                perlinSeed, startDelay, mat, emission);
+            if (!AshParticlePoolManager.EnsureReady()) return null;
+
+            EmitPooled(pos, visual, physics, perlinSeed, startDelay,
+                AshParticlePoolManager.Unlit);
+            return null;
         }
 
+        /// <summary>Backward compat: accepts unused string name parameter.</summary>
+        public static GameObject SpawnUnlit(string name, Vector2 pos,
+            in VisualParticleParams visual, in AshPhysicsParams physics,
+            float perlinSeed, float startDelay = 0f)
+            => SpawnUnlit(pos, visual, physics, perlinSeed, startDelay);
+
+        /// <summary>Backward compat: accepts unused name and EmissionParams.</summary>
+        public static GameObject SpawnUnlit(string name, Vector2 pos,
+            in VisualParticleParams visual, in AshPhysicsParams physics,
+            float perlinSeed, in EmissionParams emission, float startDelay = 0f)
+            => SpawnUnlit(pos, visual, physics, perlinSeed, startDelay);
+
+        //  SPARKS (GPU-batched via Unity ParticleSystem)
+        //  RenderMode.Stretch for trail-like appearance
+
         /// <summary>
-        /// Spawns an UNLIT AshParticle that ignores scene lighting.
-        /// Use for: fire, embers, muzzle flash — anything self-luminous.
-        /// Always visible regardless of darkness.
+        /// Core spark emitter. Scales up small sprite sizes to world-unit visibility.
+        /// All other spark overloads forward to this implementation.
         /// </summary>
-        public static GameObject SpawnUnlit(
-            string name,
-            Vector2 position,
-            in VisualParticleParams visual,
-            in AshPhysicsParams physics,
-            float perlinSeed,
-            float startDelay = 0f)
+        public static GameObject SpawnSpark(Vector2 pos,
+            in VisualParticleParams visual, in SparkParams spark)
         {
-            return SpawnAshParticleCore(name, position, visual, physics,
-                perlinSeed, startDelay, ShrapnelVisuals.UnlitMaterial, EmissionParams.None);
+            if (!ParticlePoolManager.EnsureReady() || ParticlePoolManager.Spark == null)
+                return null;
+
+            Vector2 velocity = spark.Direction * spark.Speed;
+            float size = Mathf.Max(visual.Scale * SparkSizeMultiplier, MinSparkSize);
+            ParticlePoolManager.Spark.Emit(pos, velocity, size, spark.Lifetime, visual.Color);
+
+            return null;
         }
 
-        /// <summary>
-        /// Spawns an UNLIT AshParticle with emission glow.
-        /// Use for: fire embers, hot sparks that need bloom effect.
-        /// </summary>
-        public static GameObject SpawnUnlit(
-            string name,
-            Vector2 position,
-            in VisualParticleParams visual,
-            in AshPhysicsParams physics,
-            float perlinSeed,
-            in EmissionParams emission,
-            float startDelay = 0f)
-        {
-            return SpawnAshParticleCore(name, position, visual, physics,
-                perlinSeed, startDelay, ShrapnelVisuals.UnlitMaterial, emission);
-        }
-
-        // ════════════════════════════════════════════════════════════
-        //  VISUAL SHRAPNEL SPAWNERS (transform-driven sparks)
-        // ════════════════════════════════════════════════════════════
-
-        /// <summary>
-        /// Spawns a LIT VisualShrapnel spark (linear movement, no physics).
-        /// Use for: metal chips flying off impact, cold debris streaks.
-        /// </summary>
-        public static GameObject SpawnSparkLit(
-            string name,
-            Vector2 position,
-            in VisualParticleParams visual,
-            in SparkParams spark,
+        /// <summary>Backward compat: SpawnSparkUnlit with name + EmissionParams.</summary>
+        public static GameObject SpawnSparkUnlit(string name, Vector2 pos,
+            in VisualParticleParams visual, in SparkParams spark,
             in EmissionParams emission = default)
-        {
-            Material mat = ShrapnelVisuals.LitMaterial
-                        ?? ShrapnelVisuals.UnlitMaterial;
-            return SpawnVisualShrapnelCore(name, position, visual, spark, mat, emission);
-        }
+            => SpawnSpark(pos, visual, spark);
 
-        /// <summary>
-        /// Spawns an UNLIT VisualShrapnel spark (linear movement, no physics).
-        /// Use for: hot sparks, streak sparks, tracer lines — self-luminous.
-        /// </summary>
-        public static GameObject SpawnSparkUnlit(
-            string name,
-            Vector2 position,
-            in VisualParticleParams visual,
-            in SparkParams spark,
+        /// <summary>Backward compat: SpawnSparkLit with name + EmissionParams.</summary>
+        public static GameObject SpawnSparkLit(string name, Vector2 pos,
+            in VisualParticleParams visual, in SparkParams spark,
             in EmissionParams emission = default)
-        {
-            return SpawnVisualShrapnelCore(name, position, visual, spark,
-                ShrapnelVisuals.UnlitMaterial, emission);
-        }
+            => SpawnSpark(pos, visual, spark);
 
-        // ════════════════════════════════════════════════════════════
-        //  LEGACY API (backward compatible)
-        // ════════════════════════════════════════════════════════════
+        //  LEGACY API — renamed method forwards
 
-        /// <summary>
-        /// Spawns particle with UnlitMaterial (no delay). Legacy — backward compatible.
-        /// Prefer SpawnLit() or SpawnUnlit() for new code.
-        /// </summary>
-        public static GameObject SpawnAshParticle(
-            string name,
-            Vector2 position,
-            in VisualParticleParams visual,
-            in AshPhysicsParams physics,
-            float perlinSeed)
-        {
-            return SpawnAshParticleCore(name, position, visual, physics,
-                perlinSeed, 0f, ShrapnelVisuals.UnlitMaterial, EmissionParams.None);
-        }
+        public static GameObject SpawnAshParticle(string name, Vector2 pos,
+            in VisualParticleParams visual, in AshPhysicsParams physics, float seed)
+            => SpawnLit(pos, visual, physics, seed);
 
-        /// <summary>
-        /// Spawns particle with delay. Legacy — backward compatible.
-        /// Uses UnlitMaterial.
-        /// </summary>
-        public static GameObject SpawnAshParticle(
-            string name,
-            Vector2 position,
-            in VisualParticleParams visual,
-            in AshPhysicsParams physics,
-            float perlinSeed,
-            float startDelay)
-        {
-            return SpawnAshParticleCore(name, position, visual, physics,
-                perlinSeed, startDelay, ShrapnelVisuals.UnlitMaterial, EmissionParams.None);
-        }
+        public static GameObject SpawnAshParticle(string name, Vector2 pos,
+            in VisualParticleParams visual, in AshPhysicsParams physics,
+            float seed, float delay)
+            => SpawnLit(pos, visual, physics, seed, delay);
 
-        /// <summary>
-        /// Spawns particle with explicit material override.
-        /// </summary>
-        public static GameObject SpawnAshParticle(
-            string name,
-            Vector2 position,
-            in VisualParticleParams visual,
-            in AshPhysicsParams physics,
-            float perlinSeed,
-            float startDelay,
-            Material overrideMaterial)
-        {
-            Material mat = overrideMaterial ?? ShrapnelVisuals.UnlitMaterial;
-            return SpawnAshParticleCore(name, position, visual, physics,
-                perlinSeed, startDelay, mat, EmissionParams.None);
-        }
+        public static GameObject SpawnAshParticle(string name, Vector2 pos,
+            in VisualParticleParams visual, in AshPhysicsParams physics,
+            float seed, float delay, Material overrideMaterial)
+            => SpawnLit(pos, visual, physics, seed, delay);
 
-        // ════════════════════════════════════════════════════════════
-        //  BURST SPAWN
-        // ════════════════════════════════════════════════════════════
+        //  BURST EMISSION (circle of particles around center)
 
-        /// <summary>
-        /// Spawns multiple AshParticles in a burst pattern.
-        /// Uses UnlitMaterial (legacy behavior for fire/sparks).
-        /// </summary>
-        public static void SpawnBurst(
-            string namePrefix,
-            Vector2 epicenter,
-            int count,
-            float spawnRadius,
-            System.Func<int, System.Random, VisualParticleParams> visualFactory,
-            System.Func<int, System.Random, AshPhysicsParams> physicsFactory,
-            System.Random rng)
-        {
-            SpawnBurst(namePrefix, epicenter, count, spawnRadius,
-                visualFactory, physicsFactory, rng, false);
-        }
-
-        /// <summary>
-        /// Spawns multiple AshParticles in a burst pattern.
-        /// </summary>
-        /// <param name="useLit">True = LitMaterial (debris), False = UnlitMaterial (fire).</param>
-        public static void SpawnBurst(
-            string namePrefix,
-            Vector2 epicenter,
-            int count,
-            float spawnRadius,
-            System.Func<int, System.Random, VisualParticleParams> visualFactory,
-            System.Func<int, System.Random, AshPhysicsParams> physicsFactory,
-            System.Random rng,
-            bool useLit)
+        /// <summary>Spawns a burst of particles in a circle around center.</summary>
+        public static void SpawnBurst(string prefix, Vector2 center, int count,
+            float radius,
+            System.Func<int, System.Random, VisualParticleParams> vf,
+            System.Func<int, System.Random, AshPhysicsParams> pf,
+            System.Random rng, bool useLit = false)
         {
             for (int i = 0; i < count; i++)
             {
-                Vector2 offset = rng.InsideUnitCircle() * spawnRadius;
-                Vector2 position = epicenter + offset;
-
-                var visual = visualFactory(i, rng);
-                var physics = physicsFactory(i, rng);
-                float perlinSeed = rng.Range(0f, 100f);
-
-                if (useLit)
-                    SpawnLit(namePrefix, position, visual, physics, perlinSeed);
-                else
-                    SpawnUnlit(namePrefix, position, visual, physics, perlinSeed);
+                Vector2 pos = center + rng.InsideUnitCircle() * radius;
+                var vis = vf(i, rng);
+                var phy = pf(i, rng);
+                float seed = rng.Range(0f, 100f);
+                if (useLit) SpawnLit(pos, vis, phy, seed);
+                else SpawnUnlit(pos, vis, phy, seed);
             }
         }
 
-        // ════════════════════════════════════════════════════════════
-        //  CORE — AshParticle (all AshParticle paths converge here)
-        // ════════════════════════════════════════════════════════════
+        /// <summary>Backward compat: SpawnBurst without useLit flag.</summary>
+        public static void SpawnBurst(string prefix, Vector2 center, int count,
+            float radius,
+            System.Func<int, System.Random, VisualParticleParams> vf,
+            System.Func<int, System.Random, AshPhysicsParams> pf,
+            System.Random rng)
+            => SpawnBurst(prefix, center, count, radius, vf, pf, rng, false);
+
+        //  CORE POOL EMISSION (private helper)
 
         /// <summary>
-        /// Core AshParticle creation. All public AshParticle methods route here.
+        /// Emits a single particle from the specified AshParticlePool.
+        /// O(1) amortized operation, zero-GC in steady state after warmup.
+        /// Returns immediately if pool unavailable or exhausted.
         /// </summary>
-        private static GameObject SpawnAshParticleCore(
-            string name,
-            Vector2 position,
-            in VisualParticleParams visual,
-            in AshPhysicsParams physics,
-            float perlinSeed,
-            float startDelay,
-            Material mat)
+        private static void EmitPooled(Vector2 pos,
+            in VisualParticleParams visual, in AshPhysicsParams physics,
+            float perlinSeed, float startDelay, AshParticlePool pool)
         {
-            return SpawnAshParticleCore(name, position, visual, physics,
-                perlinSeed, startDelay, mat, EmissionParams.None);
+            if (pool == null) return;
+
+            Sprite sprite = ShrapnelVisuals.GetTriangleSprite(visual.Shape);
+            if (sprite == null) return;
+
+            AshParticlePooled particle = pool.Get();
+            if (particle == null) return;
+
+            particle.Initialize(
+                pos, physics.Velocity, physics.Lifetime, visual.Color,
+                visual.Scale, physics.Gravity, physics.Drag,
+                physics.TurbulenceStrength, physics.TurbulenceScale,
+                physics.Wind, physics.ThermalLift,
+                perlinSeed, startDelay,
+                sprite, visual.SortingOrder
+            );
         }
 
-        /// <summary>
-        /// Core AshParticle creation with emission support.
-        /// </summary>
-        private static GameObject SpawnAshParticleCore(
-            string name,
-            Vector2 position,
-            in VisualParticleParams visual,
-            in AshPhysicsParams physics,
-            float perlinSeed,
-            float startDelay,
-            Material mat,
-            in EmissionParams emission)
-        {
-            if (mat == null) return null;
-
-            GameObject obj = new GameObject(name);
-            obj.transform.position = position;
-            obj.transform.localScale = Vector3.one * visual.Scale;
-
-            SpriteRenderer sr = obj.AddComponent<SpriteRenderer>();
-            sr.sprite = ShrapnelVisuals.GetTriangleSprite(visual.Shape);
-            sr.sharedMaterial = mat;
-            sr.sortingOrder = visual.SortingOrder;
-            sr.color = visual.Color;
-
-            if (emission.Enabled)
-                ApplyEmission(sr, emission.Color);
-
-            AshParticle ash = obj.AddComponent<AshParticle>();
-            ash.InitializeFullDelayed(
-                physics.Velocity,
-                physics.Lifetime,
-                visual.Color,
-                physics.Gravity,
-                physics.Drag,
-                physics.TurbulenceStrength,
-                physics.TurbulenceScale,
-                physics.Wind,
-                physics.ThermalLift,
-                perlinSeed,
-                startDelay);
-
-            DebrisTracker.RegisterVisual(obj);
-            return obj;
-        }
-
-        // ════════════════════════════════════════════════════════════
-        //  CORE — VisualShrapnel (all spark paths converge here)
-        // ════════════════════════════════════════════════════════════
+        //  EMISSION GLOW FOR PHYSICS SHRAPNEL (SpriteRenderer)
 
         /// <summary>
-        /// Core VisualShrapnel creation. Transform-driven linear movement.
-        /// </summary>
-        private static GameObject SpawnVisualShrapnelCore(
-            string name,
-            Vector2 position,
-            in VisualParticleParams visual,
-            in SparkParams spark,
-            Material mat,
-            in EmissionParams emission)
-        {
-            if (mat == null) return null;
-
-            GameObject obj = new GameObject(name);
-            obj.transform.position = position;
-            obj.transform.localScale = Vector3.one * visual.Scale;
-
-            SpriteRenderer sr = obj.AddComponent<SpriteRenderer>();
-            sr.sprite = ShrapnelVisuals.GetTriangleSprite(visual.Shape);
-            sr.sharedMaterial = mat;
-            sr.sortingOrder = visual.SortingOrder;
-            sr.color = visual.Color;
-
-            if (emission.Enabled)
-                ApplyEmission(sr, emission.Color);
-
-            VisualShrapnel vs = obj.AddComponent<VisualShrapnel>();
-            vs.Initialize(spark.Direction, spark.Speed, spark.Lifetime);
-
-            DebrisTracker.RegisterVisual(obj);
-            return obj;
-        }
-
-        // ════════════════════════════════════════════════════════════
-        //  EMISSION HELPER
-        // ════════════════════════════════════════════════════════════
-
-        /// <summary>
-        /// <summary>
-        /// Applies emission color via MaterialPropertyBlock.
-        /// PERF: Reuses static MPB instance — Unity copies data in SetPropertyBlock.
-        /// Shared by ParticleHelper, ShrapnelFactory, and ShrapnelProjectile.
+        /// Applies emission glow to a SpriteRenderer via MaterialPropertyBlock.
+        /// Used for hot physics shrapnel — zero material allocation, instant apply/clear.
         /// </summary>
         internal static void ApplyEmission(SpriteRenderer sr, Color emissionColor)
         {
@@ -576,9 +370,7 @@ namespace ScavShrapnelMod.Helpers
             sr.SetPropertyBlock(MPB);
         }
 
-        /// <summary>
-        /// Clears emission from a SpriteRenderer.
-        /// </summary>
+        /// <summary>Clears emission property block from SpriteRenderer.</summary>
         internal static void ClearEmission(SpriteRenderer sr)
         {
             sr.SetPropertyBlock(null);

@@ -2,7 +2,7 @@
 
 All notable changes to the Shrapnel Overhaul Mod will be documented here.
 
-##[0.8.2] — 2026-03-20
+## [0.8.2] — 2026-03-20
 ### Fixed
 - Fixed a major bug where singleplayer explosions would not trigger correctly when the multiplayer mod was installed but inactive.
 - Improved network synchronization interpolation to significantly reduce "jerking" and stuttering of shrapnel on clients.
@@ -32,7 +32,7 @@ All notable changes to the Shrapnel Overhaul Mod will be documented here.
 - **Zero-GC Object Pooling:** Replaced Unity's instantiation overhead with a custom `AshParticlePoolManager` to completely eliminate micro-stutters during massive explosions.
 - **GPU-Batched Sparks:** Migrated small sparks to Unity's `ParticleSystem` (`ParticlePoolManager`) to handle thousands of trailing sparks without CPU bottlenecking.
 
-##[0.7.0] — 2026-03-17
+## [0.7.0] — 2026-03-17
 ### Added
 - True Lighting & Shadows: Inert particles now correctly respect the game's 2D lighting and will be pitch black in dark areas.
 - Universal Language Support: Fixed a major bug where the mod failed to recognize blocks if the game wasn't in English. 

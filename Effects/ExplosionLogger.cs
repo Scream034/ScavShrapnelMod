@@ -1,23 +1,26 @@
 ﻿using ScavShrapnelMod.Logic;
+
 namespace ScavShrapnelMod.Effects
 {
     /// <summary>
-    /// Статическое хранилище последнего ExplosionParams.
-    /// 
-    /// Мост между Harmony Prefix и Postfix:
-    /// Prefix записывает = Postfix/другие системы читают.
-    /// 
-    /// ExplosionParams — struct (value type), Record() создаёт копию — thread-safe.
+    /// Static storage for the most recent <see cref="ExplosionParams"/>.
+    ///
+    /// Bridge between Harmony Prefix and Postfix:
+    ///   Prefix calls <see cref="Record"/> → Postfix / other systems read <see cref="LastParams"/>.
+    ///
+    /// <see cref="ExplosionParams"/> is a struct (value type), so
+    /// <see cref="Record"/> creates a copy — safe for concurrent reads.
     /// </summary>
     public static class ExplosionLogger
     {
-        /// <summary>Последние записанные параметры взрыва (копия struct).</summary>
+        /// <summary>Copy of the last recorded explosion parameters.</summary>
         public static ExplosionParams LastParams { get; private set; }
 
         /// <summary>
-        /// Записывает копию параметров взрыва.
-        /// Вызывается из ShrapnelSpawnLogic.TrySpawnFromExplosion.
+        /// Records a copy of explosion parameters.
+        /// Called from <see cref="ShrapnelSpawnLogic.PreExplosion"/>.
         /// </summary>
+        /// <param name="param">Explosion parameters to store (copied as value type).</param>
         public static void Record(ExplosionParams param)
         {
             LastParams = param;

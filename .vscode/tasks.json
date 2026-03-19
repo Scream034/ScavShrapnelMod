@@ -8,7 +8,8 @@
             "args": [
                 "build",
                 "${workspaceFolder}/ScavShrapnelMod.csproj",
-                "/p:Configuration=Debug"
+                "/p:Configuration=Debug",
+                "/v:minimal"
             ],
             "group": {
                 "kind": "build",
@@ -22,30 +23,46 @@
             }
         },
         {
-            "label": "launch-game",
+            "label": "build-release",
             "type": "shell",
-            "command": "Start-Process",
+            "command": "dotnet",
             "args": [
-                "-FilePath",
-                "${config:scavGame.path}"
+                "build",
+                "${workspaceFolder}/ScavShrapnelMod.csproj",
+                "/p:Configuration=Release",
+                "/v:minimal"
             ],
+            "group": "build",
+            "problemMatcher": "$msCompile",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "clear": true
+            }
+        },
+        {
+            "label": "launch-game",
+            "type": "process",
+            "command": "${config:scavGame.path}",
+            "args": [],
             "options": {
-                "shell": {
-                    "executable": "powershell",
-                    "args": ["-Command"]
-                }
+                "cwd": "${config:scavGame.dir}"
             },
             "presentation": {
-                "reveal": "silent"
-            }
+                "reveal": "silent",
+                "panel": "shared"
+            },
+            "problemMatcher": []
         },
         {
             "label": "build-and-launch",
             "dependsOn": ["build", "launch-game"],
             "dependsOrder": "sequence",
+            "group": "build",
             "presentation": {
                 "reveal": "always"
-            }
+            },
+            "problemMatcher": []
         }
     ]
 }

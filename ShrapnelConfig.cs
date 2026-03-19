@@ -743,16 +743,11 @@ namespace ScavShrapnelMod
             string configPath = cfg.ConfigFilePath;
             string versionSuffix = PreviousVersion ?? "unknown";
 
-            // WHY: Sanitize version string for filename safety
-            // (replace dots, slashes, other invalid chars)
             foreach (char c in Path.GetInvalidFileNameChars())
-            {
                 versionSuffix = versionSuffix.Replace(c, '_');
-            }
 
             string backupName = $"{configPath}.backup.{versionSuffix}";
 
-            // Collision: add timestamp
             if (File.Exists(backupName))
             {
                 string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
@@ -764,24 +759,17 @@ namespace ScavShrapnelMod
                 File.Copy(configPath, backupName, overwrite: false);
                 BackupPath = backupName;
 
-                // WHY: Delete original so BepInEx Bind() writes fresh defaults.
-                // ConfigFile internally checks File.Exists during Reload().
                 File.Delete(configPath);
-
-                // WHY: BepInEx ConfigFile caches entries from file read during construction.
-                // After deleting the file, we need to clear the internal cache
-                // so Bind() treats all keys as new and writes defaults.
-                // Reload() re-reads from disk (now empty/missing = clean state).
                 cfg.Reload();
 
                 WasReset = true;
 
                 Plugin.Log?.LogInfo(
-                    $"[Config] Version changed: {PreviousVersion} = {currentVersion}");
+                    $"[Config] Version changed: {PreviousVersion} → {currentVersion}");
                 Plugin.Log?.LogInfo(
                     $"[Config] Old config backed up: {Path.GetFileName(backupName)}");
                 Plugin.Log?.LogInfo(
-                    $"[Config] Fresh config will be created with v{currentVersion} defaults.");
+                    $"[Config] Fresh config created with v{currentVersion} defaults.");
             }
             catch (Exception e)
             {
@@ -791,11 +779,8 @@ namespace ScavShrapnelMod
         }
 
         /// <summary>
-        /// Returns user-friendly notification about config reset.
+        /// Returns user-friendly notification about config reset for the in-game console.
         /// Returns null if no reset occurred.
-        ///
-        /// WHY: Displayed via Debug.Log which ConsoleScript picks up through
-        /// Application.logMessageReceived = ApplicationLogCallback = LogToConsole.
         /// </summary>
         public static string GetResetNotification()
         {
@@ -805,7 +790,7 @@ namespace ScavShrapnelMod
                 ? Path.GetFileName(BackupPath)
                 : "unknown";
 
-            return $"[{Plugin.Name}] Config reset: v{PreviousVersion} = v{Plugin.Version}. " +
+            return $"[{Plugin.Name}] Config reset: v{PreviousVersion} → v{Plugin.Version}. " +
                    $"Old settings backed up to: {backupFile}";
         }
     }

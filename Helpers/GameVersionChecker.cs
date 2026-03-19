@@ -1,62 +1,65 @@
-﻿using HarmonyLib;
-using System.Collections;
-using System.Collections.Generic;
-using System.Reflection;
-using TMPro;
-using UnityEngine;
+﻿using UnityEngine;
 
 namespace ScavShrapnelMod.Helpers
 {
-    internal class GameVersionChecker
+    /// <summary>
+    /// Validates the running game version against known-compatible versions.
+    ///
+    /// Uses <see cref="Application.version"/> — Unity's built-in version string
+    /// set in Player Settings. Available immediately in Plugin.Awake(), no
+    /// scene scanning or patching required.
+    ///
+    /// On mismatch: warning in BepInEx log + in-game console notification.
+    /// The mod continues to load — graceful degradation, not a hard block.
+    /// </summary>
+    public static class GameVersionChecker
     {
-        public enum PatchStatus
+        /// <summary>Game versions this mod is tested and confirmed working with.</summary>
+        private static readonly string[] SupportedVersions = { "5.1" };
+
+        /// <summary>
+        /// Raw version string from <see cref="Application.version"/>,
+        /// e.g. <c>"5.1"</c>. Set after <see cref="Check"/> is called.
+        /// </summary>
+        public static string DetectedVersion { get; private set; } = string.Empty;
+
+        /// <summary>
+        /// True if <see cref="DetectedVersion"/> is in <see cref="SupportedVersions"/>.
+        /// Defaults to true until <see cref="Check"/> is called.
+        /// </summary>
+        public static bool IsSupported { get; private set; } = true;
+
+        /// <summary>
+        /// Reads <see cref="Application.version"/>, evaluates compatibility,
+        /// and logs the result. Call once from <see cref="Plugin.Awake"/>.
+        /// </summary>
+        public static void Check()
         {
-            Pending = 0,
-            Safe = 1,
-            Unsafe = -1
-        }
+            DetectedVersion = Application.version;
+            IsSupported = IsVersionSupported(DetectedVersion);
 
-        public static PatchStatus Status { get; private set; } = PatchStatus.Pending;
-        public static string ActiveVersion { get; private set; } = "";
-
-        internal static IEnumerator Run(Harmony harmony)
-        {
-            Status = PatchStatus.Pending;
-            ActiveVersion = "";
-
-            MethodInfo target = AccessTools.Method(typeof(PreRunScript), "Start");
-            HarmonyMethod prefix = new HarmonyMethod(typeof(GameVersionChecker).GetMethod("VersionCheck", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public));
-            harmony.Patch(target, prefix: prefix);
-
-            while (Status == PatchStatus.Pending)
-                yield return null;
-
-            harmony.Unpatch(target, HarmonyPatchType.Prefix);
-        }
-
-        internal static void VersionCheck()
-        {
-            Dictionary<string, (string label, string code)> supportedVersions = new Dictionary<string, (string label, string code)>
+            if (IsSupported)
             {
-                ["Text (TMP) (18)"] = ("V5 Pre-testing 5", "v5p5"),
-                ["Text (TMP) (17)"] = ("V5 Pre-testing 4", "v5p4"),
-                ["Version"] = ("v5.", "v5d")
-            };
-            foreach (var version in supportedVersions)
-            {
-                GameObject obj = GameObject.Find(version.Key);
-                if (obj == null)
-                    continue;
-
-                if (obj.GetComponent<TextMeshProUGUI>().text.Contains(version.Value.label))
-                {
-                    ActiveVersion = version.Value.code;
-                    Status = PatchStatus.Safe;
-                    return;
-                }
+                Plugin.Log.LogInfo(
+                    $"[Version] Game version '{DetectedVersion}' ✓ supported");
+                return;
             }
 
-            Status = PatchStatus.Unsafe;
+            string warning =
+                $"[{Plugin.Name}] WARNING: Game version '{DetectedVersion}' " +
+                $"is not tested with mod v{Plugin.Version}. " +
+                $"Supported: {string.Join(", ", SupportedVersions)}. " +
+                "Proceed with caution — some effects may not work correctly.";
+
+            Plugin.Log.LogWarning(warning);
+            Console.Error(warning);
+        }
+
+        private static bool IsVersionSupported(string version)
+        {
+            foreach (string v in SupportedVersions)
+                if (v == version) return true;
+            return false;
         }
     }
 }

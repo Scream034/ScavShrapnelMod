@@ -1,5 +1,7 @@
 {
     "dotnet.preferCSharpExtension": true,
+    
+    // USER-SPECIFIC: Update these paths to match your game installation
     "scavGame.path": "D:\\Games\\Scav\\CasualtiesUnknown.exe",
     "scavGame.dir": "D:\\Games\\Scav"
 }

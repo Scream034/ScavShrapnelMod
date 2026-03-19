@@ -27,7 +27,7 @@ namespace ScavShrapnelMod.Core
             _physMat ?? (_physMat = new PhysicsMaterial2D("ShrapnelMat")
             {
                 bounciness = 0.15f,
-                friction   = 0.6f
+                friction = 0.6f
             });
 
         //  WOUND SPRITES (lazy-loaded)
@@ -43,13 +43,13 @@ namespace ScavShrapnelMod.Core
             try
             {
                 _woundSprite = Resources.Load<Sprite>("Special/footglass");
-                _woundPanel  = Resources.Load<Sprite>("Special/footglasshealthpanel");
+                _woundPanel = Resources.Load<Sprite>("Special/footglasshealthpanel");
             }
             catch { }
         }
 
         internal static Sprite WoundSprite => _woundSprite;
-        internal static Sprite WoundPanel  => _woundPanel;
+        internal static Sprite WoundPanel => _woundPanel;
 
         //  DAMAGE THROTTLE
 
@@ -67,28 +67,35 @@ namespace ScavShrapnelMod.Core
 
         //  PHYSICS SHRAPNEL — primary damage dealers
 
-        /// <summary>Spawns a physics shrapnel fragment in a random direction.</summary>
-        public static void Spawn(Vector2 epicenter, float baseSpeed,
+        /// <summary>
+        /// Spawns a physics shrapnel fragment in a random direction.
+        /// Returns the ShrapnelProjectile component, or null for Micro weight (visual-only).
+        /// </summary>
+        public static ShrapnelProjectile Spawn(Vector2 epicenter, float baseSpeed,
             ShrapnelProjectile.ShrapnelType type, ShrapnelWeight weight,
             int index, System.Random rng)
         {
             Vector2 direction = GetLaunchDirection(type, rng);
-            SpawnCore(epicenter, baseSpeed, type, weight, index, rng, direction);
+            return SpawnCore(epicenter, baseSpeed, type, weight, index, rng, direction);
         }
 
-        /// <summary>Spawns a physics shrapnel fragment in a specific direction ± spread.</summary>
-        public static void SpawnDirectional(Vector2 epicenter, float baseSpeed,
+        /// <summary>
+        /// Spawns a physics shrapnel fragment in a specific direction ± spread.
+        /// Returns the ShrapnelProjectile component, or null for Micro weight (visual-only).
+        /// </summary>
+        public static ShrapnelProjectile SpawnDirectional(Vector2 epicenter, float baseSpeed,
             ShrapnelProjectile.ShrapnelType type, ShrapnelWeight weight,
             int index, System.Random rng, Vector2 direction)
         {
             direction = MathHelper.RotateDirection(direction,
                 rng.Range(-0.26f, 0.26f));
-            SpawnCore(epicenter, baseSpeed, type, weight, index, rng, direction);
+            return SpawnCore(epicenter, baseSpeed, type, weight, index, rng, direction);
         }
 
         /// <summary>
         /// Core shrapnel spawner. Creates physics GameObject with ShrapnelProjectile.
         /// Registers with DebrisTracker and (if server in MP) with ShrapnelNetSync.
+        /// Returns the ShrapnelProjectile component, or null for Micro weight.
         ///
         /// MULTIPLAYER FIX:
         ///   Seed is derived from explosion's RNG chain (deterministic).
@@ -98,7 +105,7 @@ namespace ScavShrapnelMod.Core
         ///   scalePacked = scale × 1000. Max scale (Massive) = 0.8 = 800.
         ///   Well within ushort max (65535). No overflow possible.
         /// </summary>
-        private static void SpawnCore(Vector2 epicenter, float baseSpeed,
+        private static ShrapnelProjectile SpawnCore(Vector2 epicenter, float baseSpeed,
             ShrapnelProjectile.ShrapnelType type, ShrapnelWeight weight,
             int index, System.Random rng, Vector2 direction)
         {
@@ -106,12 +113,12 @@ namespace ScavShrapnelMod.Core
             if (weight == ShrapnelWeight.Micro)
             {
                 SpawnMicroVisual(epicenter, baseSpeed, type, rng);
-                return;
+                return null;
             }
 
             var shape = (ShrapnelVisuals.TriangleShape)rng.Next(0, 6);
             Sprite sprite = ShrapnelVisuals.GetTriangleSprite(shape);
-            if (sprite == null) return;
+            if (sprite == null) return null;
 
             EnsureWoundSprites();
             float heat = HeatForWeight(weight);
@@ -120,7 +127,7 @@ namespace ScavShrapnelMod.Core
             Material mat = heat > ShrapnelVisuals.HotThreshold
                 ? ShrapnelVisuals.UnlitMaterial
                 : (ShrapnelVisuals.LitMaterial ?? ShrapnelVisuals.UnlitMaterial);
-            if (mat == null) return;
+            if (mat == null) return null;
 
             GameObject obj = new GameObject($"Shr_{type}_{index}");
             obj.transform.position =
@@ -153,11 +160,11 @@ namespace ScavShrapnelMod.Core
             col.enabled = false; // Enabled after physics delay in ShrapnelProjectile
 
             ShrapnelProjectile proj = obj.AddComponent<ShrapnelProjectile>();
-            proj.Type     = type;
-            proj.Weight   = weight;
-            proj.Heat     = heat;
+            proj.Type = type;
+            proj.Weight = weight;
+            proj.Heat = heat;
             proj.CanBreak = weight != ShrapnelWeight.Hot;
-            proj.Seed     = ShrapnelSpawnLogic.MakeShrapnelSeed(rng);
+            proj.Seed = ShrapnelSpawnLogic.MakeShrapnelSeed(rng);
 
             SetDamage(proj, type, weight, rng);
             LaunchWithDirection(rb, weight, baseSpeed, direction, rng);
@@ -165,6 +172,8 @@ namespace ScavShrapnelMod.Core
 
             DebrisTracker.Register(obj);
             ShrapnelNetSync.ServerRegister(proj); // no-op in singleplayer/on client
+
+            return proj;
         }
 
         //  MICRO VISUAL (sparks only, no physics GO)
@@ -205,13 +214,13 @@ namespace ScavShrapnelMod.Core
             switch (weight)
             {
                 case ShrapnelWeight.Hot:
-                    rb.mass = 0.02f; rb.gravityScale = 0.3f;  rb.drag = 0.4f; break;
+                    rb.mass = 0.02f; rb.gravityScale = 0.3f; rb.drag = 0.4f; break;
                 case ShrapnelWeight.Medium:
                     rb.mass = 0.08f; rb.gravityScale = 0.15f; rb.drag = 0.2f; break;
                 case ShrapnelWeight.Heavy:
                     rb.mass = 0.25f; rb.gravityScale = 0.35f; rb.drag = 0.2f; break;
                 case ShrapnelWeight.Massive:
-                    rb.mass = 0.8f;  rb.gravityScale = 0.5f;  rb.drag = 0.1f; break;
+                    rb.mass = 0.8f; rb.gravityScale = 0.5f; rb.drag = 0.1f; break;
                 case ShrapnelWeight.Micro:
                     rb.mass = 0.005f; rb.gravityScale = 0.1f; rb.drag = 0.5f; break;
             }
@@ -244,12 +253,12 @@ namespace ScavShrapnelMod.Core
         {
             switch (weight)
             {
-                case ShrapnelWeight.Micro:   return rng.Range(1.5f, 2.5f);
-                case ShrapnelWeight.Hot:     return rng.Range(0.8f, 1.3f);
-                case ShrapnelWeight.Medium:  return rng.Range(0.8f, 1.2f);
-                case ShrapnelWeight.Heavy:   return rng.Range(0.4f, 0.8f);
+                case ShrapnelWeight.Micro: return rng.Range(1.5f, 2.5f);
+                case ShrapnelWeight.Hot: return rng.Range(0.8f, 1.3f);
+                case ShrapnelWeight.Medium: return rng.Range(0.8f, 1.2f);
+                case ShrapnelWeight.Heavy: return rng.Range(0.4f, 0.8f);
                 case ShrapnelWeight.Massive: return rng.Range(0.2f, 0.4f);
-                default:                     return 1f;
+                default: return 1f;
             }
         }
 
@@ -297,7 +306,7 @@ namespace ScavShrapnelMod.Core
             try { ambientTemp = WorldGeneration.world.ambientTemperature; } catch { }
 
             bool isCold = ambientTemp < 5f;
-            bool isHot  = ambientTemp > 25f;
+            bool isHot = ambientTemp > 25f;
 
             for (int i = 0; i < count; i++)
             {
@@ -398,9 +407,9 @@ namespace ScavShrapnelMod.Core
             switch (parent)
             {
                 case ShrapnelWeight.Massive: return ShrapnelWeight.Heavy;
-                case ShrapnelWeight.Heavy:   return ShrapnelWeight.Medium;
-                case ShrapnelWeight.Medium:  return ShrapnelWeight.Hot;
-                default:                     return ShrapnelWeight.Micro;
+                case ShrapnelWeight.Heavy: return ShrapnelWeight.Medium;
+                case ShrapnelWeight.Medium: return ShrapnelWeight.Hot;
+                default: return ShrapnelWeight.Micro;
             }
         }
 
@@ -435,13 +444,13 @@ namespace ScavShrapnelMod.Core
             col.sharedMaterial = PhysMat;
 
             ShrapnelProjectile proj = obj.AddComponent<ShrapnelProjectile>();
-            proj.Type          = type;
-            proj.Weight        = weight;
-            proj.Heat          = 0.1f;
-            proj.CanBreak      = false;
-            proj.Damage        = rng.Range(2f, 6f) * matProps.DamageMult;
-            proj.BleedAmount   = rng.Range(0.3f, 1.5f);
-            proj.Seed          = rng.Next();
+            proj.Type = type;
+            proj.Weight = weight;
+            proj.Heat = 0.1f;
+            proj.CanBreak = false;
+            proj.Damage = rng.Range(2f, 6f) * matProps.DamageMult;
+            proj.BleedAmount = rng.Range(0.3f, 1.5f);
+            proj.Seed = rng.Next();
 
             Vector2 spread = rng.InsideUnitCircle() * 0.8f;
             Vector2 dir = (impactNormal + spread).normalized;
@@ -464,12 +473,12 @@ namespace ScavShrapnelMod.Core
         {
             switch (w)
             {
-                case ShrapnelWeight.Micro:   return rng.Range(0.02f, 0.05f);
-                case ShrapnelWeight.Hot:     return rng.Range(0.08f, 0.14f);
-                case ShrapnelWeight.Medium:  return rng.Range(0.14f, 0.25f);
-                case ShrapnelWeight.Heavy:   return rng.Range(0.22f, 0.45f);
+                case ShrapnelWeight.Micro: return rng.Range(0.02f, 0.05f);
+                case ShrapnelWeight.Hot: return rng.Range(0.08f, 0.14f);
+                case ShrapnelWeight.Medium: return rng.Range(0.14f, 0.25f);
+                case ShrapnelWeight.Heavy: return rng.Range(0.22f, 0.45f);
                 case ShrapnelWeight.Massive: return rng.Range(0.5f, 0.8f);
-                default:                     return 0.18f;
+                default: return 0.18f;
             }
         }
 
@@ -477,12 +486,12 @@ namespace ScavShrapnelMod.Core
         {
             switch (w)
             {
-                case ShrapnelWeight.Micro:   return 1.0f;
-                case ShrapnelWeight.Hot:     return 1.0f;
-                case ShrapnelWeight.Medium:  return 0.4f;
-                case ShrapnelWeight.Heavy:   return 0.15f;
+                case ShrapnelWeight.Micro: return 1.0f;
+                case ShrapnelWeight.Hot: return 1.0f;
+                case ShrapnelWeight.Medium: return 0.4f;
+                case ShrapnelWeight.Heavy: return 0.15f;
                 case ShrapnelWeight.Massive: return 0.08f;
-                default:                     return 0f;
+                default: return 0f;
             }
         }
 
@@ -543,17 +552,17 @@ namespace ScavShrapnelMod.Core
                     tr.time = 0.4f;
                     tr.startWidth = 0.12f * scale * 5f; tr.endWidth = 0f;
                     tr.startColor = new Color(0.3f, 0.25f, 0.2f, 0.8f);
-                    tr.endColor   = new Color(0.2f, 0.2f, 0.2f, 0f); break;
+                    tr.endColor = new Color(0.2f, 0.2f, 0.2f, 0f); break;
                 case ShrapnelWeight.Hot:
                     tr.time = 0.25f;
                     tr.startWidth = 0.06f * scale * 10f; tr.endWidth = 0f;
                     tr.startColor = new Color(1f, 0.5f, 0.1f, 0.9f);
-                    tr.endColor   = new Color(1f, 0.2f, 0f, 0f); break;
+                    tr.endColor = new Color(1f, 0.2f, 0f, 0f); break;
                 default:
                     tr.time = 0.15f;
                     tr.startWidth = 0.04f * scale * 10f; tr.endWidth = 0f;
                     tr.startColor = new Color(0.6f, 0.6f, 0.6f, 0.6f);
-                    tr.endColor   = new Color(0.4f, 0.4f, 0.4f, 0f); break;
+                    tr.endColor = new Color(0.4f, 0.4f, 0.4f, 0f); break;
             }
         }
     }

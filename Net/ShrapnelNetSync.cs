@@ -608,7 +608,14 @@ namespace ScavShrapnelMod.Net
                 SendSnapshot();
         }
 
-        //  SERVER = CLIENT: SPAWN (Reliable, 11 bytes)
+        //  SERVER → CLIENT: SPAWN (Reliable, 11 bytes)
+        //  Packet layout:
+        //    netId(2) + posX(2) + posY(2) + typePacked(1) + heat(1) + shape(1) + scale(2) = 11
+        //  typePacked bit layout:
+        //    bits 0-2: ShrapnelType (0-4)
+        //    bits 3-5: ShrapnelWeight (0-4)
+        //    bit 6:    HasTrail
+        //    bit 7:    reserved
 
         private void SendSpawn(ShrapnelProjectile proj, ushort netId)
         {
@@ -621,7 +628,13 @@ namespace ScavShrapnelMod.Net
             Vector2 pos = proj.transform.position;
             short posX = (short)(pos.x * 10f);
             short posY = (short)(pos.y * 10f);
-            byte typePacked = (byte)((int)proj.Type | ((int)proj.Weight << 3));
+
+            // WHY: Pack type(3 bits) + weight(3 bits) + hasTrail(1 bit) into single byte
+            byte typePacked = (byte)(
+                (int)proj.Type |
+                ((int)proj.Weight << 3) |
+                (proj.HasTrail ? (1 << 6) : 0));
+
             byte heatPacked = (byte)(Mathf.Clamp01(proj.Heat) * 255f);
 
             // Determine shape by matching sprite
@@ -896,6 +909,7 @@ namespace ScavShrapnelMod.Net
                 float y = posY / 10f;
                 var type = (ShrapnelProjectile.ShrapnelType)(typePacked & 0x07);
                 var weight = (ShrapnelWeight)((typePacked >> 3) & 0x07);
+                bool hasTrail = (typePacked & (1 << 6)) != 0;
                 float heat = heatPacked / 255f;
                 var shape = (ShrapnelVisuals.TriangleShape)Mathf.Clamp(shapeIndex, 0, 5);
                 float scale = scalePacked / 1000f;
@@ -909,7 +923,8 @@ namespace ScavShrapnelMod.Net
                 }
 
                 var mirror = ClientMirrorShrapnel.Create(
-                    netId, new Vector2(x, y), type, weight, heat, shape, scale);
+                    netId, new Vector2(x, y), type, weight, heat, shape, scale,
+                    hasTrail);
 
                 if (mirror != null)
                     _mirrors[netId] = mirror;
@@ -994,9 +1009,17 @@ namespace ScavShrapnelMod.Net
                 var clientIds = i.GetClientIds();
                 int clientCount = clientIds != null ? clientIds.Count : 0;
 
+                // Count fragments with trails for diagnostics
+                int trailCount = 0;
+                foreach (var kvp in i._tracked)
+                {
+                    if (kvp.Value != null && kvp.Value.HasTrail)
+                        trailCount++;
+                }
+
                 return "=== SHRAPNEL NET SYNC ===\n" +
                     $"  Role: SERVER (host)\n" +
-                    $"  Tracked shrapnel: {i._tracked.Count}\n" +
+                    $"  Tracked shrapnel: {i._tracked.Count} ({trailCount} with trail)\n" +
                     $"  Next ID: {i._nextId}\n" +
                     $"  Spawns sent: {i._spawnsSent}\n" +
                     $"  Snapshots sent: {i._snapshotsSent}\n" +
@@ -1012,9 +1035,20 @@ namespace ScavShrapnelMod.Net
                     : -1f;
                 string ageStr = snapshotAge >= 0f ? $"{snapshotAge:F2}s ago" : "never";
 
+                // Count mirrors with trails for diagnostics
+                int trailMirrors = 0;
+                foreach (var kvp in i._mirrors)
+                {
+                    if (kvp.Value != null)
+                    {
+                        var tr = kvp.Value.GetComponent<TrailRenderer>();
+                        if (tr != null) trailMirrors++;
+                    }
+                }
+
                 return "=== SHRAPNEL NET SYNC ===\n" +
                     $"  Role: CLIENT\n" +
-                    $"  Active mirrors: {i._mirrors.Count}\n" +
+                    $"  Active mirrors: {i._mirrors.Count} ({trailMirrors} with trail)\n" +
                     $"  Spawns received: {i._spawnsReceived}\n" +
                     $"  Snapshots received: {i._snapshotsReceived}\n" +
                     $"  Destroys received: {i._destroysReceived}\n" +

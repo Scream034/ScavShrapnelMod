@@ -102,26 +102,24 @@ namespace ScavShrapnelMod.Patches
                     Plugin.WarmVisuals();
 
                 // ═══════════════════════════════════════════════
-                //  MP CLIENT
+                //  MP CLIENT (defense-in-depth: require isMP)
+                //
+                //  WHY both checks: IsClient gate on IsNetworkRunning
+                //  is the primary fix (in MultiplayerHelper). The isMP
+                //  guard here prevents future regressions if IsClient
+                //  logic changes. Belt-and-suspenders for a critical path.
                 // ═══════════════════════════════════════════════
-                if (isClient)
+                if (isMP && isClient)
                 {
-                    // MP mod's ForceCreateExplosionEffect zeroes ALL damage fields.
-                    // Local game logic (gravbag.Update, mine trigger) keeps full damage.
-                    // This is the ONLY reliable way to distinguish server packets.
                     bool isFromServer = param.structuralDamage <= 0.01f
                                      && param.disfigureChance <= 0.01f;
 
                     if (!isFromServer)
-                        return false;  // Silently block local game logic
+                        return false;
 
                     Plugin.Log.LogInfo($"[Explosion] CLIENT pos={param.position}" +
                         $" range={param.range:F1}");
 
-                    // Spawn visual effects using standard mine profile.
-                    // We can't know the exact explosion type from network params,
-                    // but mine profile gives good visuals for all types.
-                    // Client never spawns physics shrapnel (ShouldSpawnPhysicsShrapnel=false).
                     try
                     {
                         var clientParam = CreateClientVisualParams(param);
@@ -133,8 +131,6 @@ namespace ScavShrapnelMod.Patches
                         Plugin.Log.LogError($"[Explosion] Client effects: {e.Message}");
                     }
 
-                    // Let ForceCreateExplosionEffect's zero-damage call through
-                    // so vanilla explosion visuals (sound, particle, blastmark) play
                     return true;
                 }
 
@@ -158,8 +154,6 @@ namespace ScavShrapnelMod.Patches
                         }
                     }
 
-                    // Let vanilla + MP mod run (sends CreateExplosionEffect to clients)
-                    // Postfix handles PostExplosion after block destruction
                     return true;
                 }
 
@@ -439,12 +433,10 @@ namespace ScavShrapnelMod.Patches
 
                 ExplosionTracker.Track(info.Position);
 
-                // MULTIPLAYER CLIENT CHECK:
-                // On MP clients, the MP mod's ForceCreateExplosionEffect already
-                // triggers our CreateExplosionPatch.Prefix, which calls Pre+Post.
-                // DestroyBackup would cause a SECOND Pre+Post = double effects.
-                // Skip DestroyBackup entirely on MP clients.
-                if (MultiplayerHelper.IsClient)
+                // WHY isMP && isClient: defense-in-depth against is_client being
+                // true when network isn't running (singleplayer with MP mod loaded).
+                // Primary fix is in MultiplayerHelper.IsClient, this is belt-and-suspenders.
+                if (MultiplayerHelper.IsNetworkRunning && MultiplayerHelper.IsClient)
                 {
                     if (ShrapnelConfig.DebugLogging.Value)
                         Plugin.Log.LogInfo(

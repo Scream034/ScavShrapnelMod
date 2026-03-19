@@ -44,7 +44,11 @@ namespace ScavShrapnelMod.Helpers
         {
             get
             {
-                if (!IsMultiplayerModPresent) return false;
+                // WHY: is_client field in Krokosha MP mod can be true even when
+                // network isn't running (singleplayer with MP mod loaded).
+                // Without this gate, singleplayer explosions are silently blocked
+                // because CreateExplosionPatch.Prefix enters the CLIENT branch.
+                if (!IsNetworkRunning) return false;
                 try { return (bool)_isClientField.GetValue(null); }
                 catch { return false; }
             }

@@ -1,6 +1,6 @@
 # Shrapnel Overhaul Mod
 
-![Version](https://img.shields.io/badge/version-0.7.0-blue)
+![Version](https://img.shields.io/badge/version-0.8.0-blue)
 
 [English](#-english) | [Русский](#-русский)
 

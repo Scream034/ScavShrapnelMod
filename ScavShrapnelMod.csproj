@@ -38,27 +38,30 @@
     <Compile Include="ShrapnelConfig.cs" />
     <Compile Include="Patches\ExplosionPatches.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
-    
+
     <!-- Core -->
+    <Compile Include="Core\DeferredExplosionRunner.cs" />
+    <Compile Include="Core\ParticlePool.cs" />
+    <Compile Include="Core\ParticlePoolManager.cs" />
     <Compile Include="Core\DebrisTracker.cs" />
     <Compile Include="Core\ShrapnelVisuals.cs" />
     <Compile Include="Core\ShrapnelFactory.cs" />
-    
+
     <!-- Projectiles -->
     <Compile Include="Projectiles\ShrapnelProjectile.cs" />
     <Compile Include="Projectiles\VisualShrapnel.cs" />
     <Compile Include="Projectiles\AshParticle.cs" />
-    
+
     <!-- Effects -->
     <Compile Include="Effects\ExplosionEffectsLogic.cs" />
     <Compile Include="Effects\BulletImpactEffects.cs" />
     <Compile Include="Effects\GroundDebrisLogic.cs" />
     <Compile Include="Effects\ExplosionLogger.cs" />
-    
+
     <!-- Logic -->
     <Compile Include="Logic\ShrapnelSpawnLogic.cs" />
     <Compile Include="Logic\BulletShrapnelLogic.cs" />
-    
+
     <!-- Helpers -->
     <Compile Include="Helpers\MathHelper.cs" />
     <Compile Include="Helpers\ParticleHelper.cs" />
@@ -67,16 +70,17 @@
     <Compile Include="Helpers\CustomResourceManager.cs" />
     <Compile Include="Helpers\FileManager.cs" />
     <Compile Include="Helpers\GameVersionChecker.cs" />
-    
+
     <!-- Console -->
-    <Compile Include="Console\ConsoleCommands.cs" />
+    <Compile Include="Console.cs" />
   </ItemGroup>
   <ItemGroup>
     <Reference Include="0Harmony, Version=2.9.0.0, Culture=neutral, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
       <HintPath>Libraries\0Harmony.dll</HintPath>
     </Reference>
-    <Reference Include="Assembly-CSharp, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
+    <Reference
+      Include="Assembly-CSharp, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
       <HintPath>Libraries\Assembly-CSharp.dll</HintPath>
     </Reference>
@@ -90,7 +94,8 @@
     <Reference Include="NAudio.Core">
       <HintPath>Libraries\NAudio.Core.dll</HintPath>
     </Reference>
-    <Reference Include="Unity.TextMeshPro, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
+    <Reference
+      Include="Unity.TextMeshPro, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
       <HintPath>Libraries\Unity.TextMeshPro.dll</HintPath>
     </Reference>
@@ -98,11 +103,13 @@
       <SpecificVersion>False</SpecificVersion>
       <HintPath>Libraries\UnityEngine.dll</HintPath>
     </Reference>
-    <Reference Include="UnityEngine.AudioModule, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
+    <Reference
+      Include="UnityEngine.AudioModule, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
       <HintPath>Libraries\UnityEngine.AudioModule.dll</HintPath>
     </Reference>
-    <Reference Include="UnityEngine.CoreModule, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
+    <Reference
+      Include="UnityEngine.CoreModule, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
       <HintPath>Libraries\UnityEngine.CoreModule.dll</HintPath>
     </Reference>
@@ -115,13 +122,27 @@
     <Reference Include="UnityEngine.Physics2DModule">
       <HintPath>Libraries\UnityEngine.Physics2DModule.dll</HintPath>
     </Reference>
-    <Reference Include="UnityEngine.TextRenderingModule, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
+    <Reference
+      Include="UnityEngine.TextRenderingModule, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
       <HintPath>Libraries\UnityEngine.TextRenderingModule.dll</HintPath>
     </Reference>
     <Reference Include="UnityEngine.UI">
       <HintPath>Libraries\UnityEngine.UI.dll</HintPath>
     </Reference>
+    <Reference Include="Unity.RenderPipelines.Universal.Runtime">
+      <HintPath>Libraries\Unity.RenderPipelines.Universal.Runtime.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.ParticleSystemModule">
+      <HintPath>Libraries\UnityEngine.ParticleSystemModule.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.TilemapModule">
+      <HintPath>Libraries\UnityEngine.TilemapModule.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.GridModule">
+      <HintPath>Libraries\UnityEngine.GridModule.dll</HintPath>
+    </Reference>
+    <Reference Include="System"></Reference>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 

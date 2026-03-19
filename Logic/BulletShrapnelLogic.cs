@@ -112,7 +112,7 @@ namespace ScavShrapnelMod.Logic
             }
             catch (Exception e)
             {
-                Plugin.Log.LogWarning($"[ShrapnelMod] BulletShrapnel: {e.Message}");
+                Console.Error($"BulletShrapnel: {e.Message}");
             }
         }
 

@@ -1,5 +1,6 @@
-﻿using BepInEx.Configuration;
-using ScavShrapnelMod.Projectiles;
+﻿using System;
+using System.IO;
+using BepInEx.Configuration;
 
 namespace ScavShrapnelMod
 {
@@ -9,24 +10,55 @@ namespace ScavShrapnelMod
     /// All parameters available in BepInEx/config/ScavShrapnelMod.cfg.
     /// Changes apply on game restart.
     ///
+    /// VERSION MIGRATION:
+    /// When mod version changes, the old config is backed up to
+    /// ScavShrapnelMod.cfg.backup.{version} and a fresh config with
+    /// new defaults is created. User is notified in game console.
+    ///
     /// Sections:
     /// - Performance: limits, throttle, lifetime
+    /// - Performance.Pools: ParticleSystem pool sizes
     /// - Bullets: bullet shrapnel and impact effects
-    /// - Explosions: explosion classification
+    /// - Explosions: explosion classification and profiles
+    /// - Explosions.Mine/Dynamite/Turret: per-profile parameters
     /// - Effects.Explosion: smoke, embers, crater dust
     /// - Effects.BulletImpact: sparks, flash, metal chips
     /// - GroundDebris: surface debris particles
+    /// - Sparks: shrapnel projectile impact sparks
+    /// - Sparks.Diversity: spark sub-type ratios
+    /// - Micro: micro-shrapnel player interaction
     /// - Lifetime: debris/stuck duration
-    /// - Interact: player interaction
+    /// - Interact: player interaction distance
     /// </summary>
     public static class ShrapnelConfig
     {
+        //  VERSION TRACKING
+
+        /// <summary>
+        /// Stored mod version from config file.
+        /// Used to detect version changes and trigger config reset.
+        /// </summary>
+        private static ConfigEntry<string> _modVersion;
+
+        /// <summary>True if config was reset due to version mismatch this session.</summary>
+        public static bool WasReset { get; private set; }
+
+        /// <summary>Previous version before reset, or null if no reset occurred.</summary>
+        public static string PreviousVersion { get; private set; }
+
+        /// <summary>Path to backup file if config was reset, or null.</summary>
+        public static string BackupPath { get; private set; }
+
         //  PERFORMANCE
 
         /// <summary>Max alive physical shrapnel (ShrapnelProjectile) objects.</summary>
         public static ConfigEntry<int> MaxAliveDebris;
 
-        /// <summary>Max alive visual particles (AshParticle, VisualShrapnel, etc.).</summary>
+        /// <summary>
+        /// Max alive visual particles in fallback GameObject mode.
+        /// When ParticleSystem pools are active, this only limits fallback particles.
+        /// Pool particles are limited by their own MaxParticles setting.
+        /// </summary>
         public static ConfigEntry<int> MaxAliveVisualParticles;
 
         /// <summary>Global spawn count multiplier (0.1 = 10%, 2.0 = 200%).</summary>
@@ -41,50 +73,70 @@ namespace ScavShrapnelMod
         /// <summary>Min distance between spawns in same frame (m).</summary>
         public static ConfigEntry<float> MinDistanceBetweenSpawns;
 
-        /// <summary>Max DamageBlock calls per frame.</summary>
+        /// <summary>Max DamageBlock calls per frame to prevent lag spikes.</summary>
         public static ConfigEntry<int> MaxDamagePerFrame;
 
-        /// <summary>Enable Debug.Log for each explosion.</summary>
+        /// <summary>Enable Debug.Log for each explosion (verbose).</summary>
         public static ConfigEntry<bool> DebugLogging;
+
+        //  PERFORMANCE — PARTICLE POOLS
+
+        /// <summary>
+        /// Max concurrent particles in DebrisPool (alpha-blended).
+        /// Handles: ground chunks, dust, smoke, ash, metal chips, steam.
+        /// </summary>
+        public static ConfigEntry<int> PoolDebrisMaxParticles;
+
+        /// <summary>
+        /// Max concurrent particles in GlowPool (additive).
+        /// Handles: embers, fire, burning chunks, muzzle flash.
+        /// </summary>
+        public static ConfigEntry<int> PoolGlowMaxParticles;
+
+        /// <summary>
+        /// Max concurrent particles in SparkPool (additive + stretch).
+        /// Handles: streak sparks, core sparks, micro shrapnel visuals.
+        /// </summary>
+        public static ConfigEntry<int> PoolSparkMaxParticles;
 
         //  BULLETS
 
-        /// <summary>Enable physical shrapnel fragments from bullet impacts.</summary>
+        /// <summary>Enable physical shrapnel fragments from bullet impacts on metal.</summary>
         public static ConfigEntry<bool> EnableBulletFragments;
 
-        /// <summary>Enable visual impact effects (flash, sparks, chips).</summary>
+        /// <summary>Enable visual impact effects (flash, sparks, metal chips) on metal.</summary>
         public static ConfigEntry<bool> EnableBulletImpactEffects;
 
         /// <summary>Min frames between bullet shrapnel spawns.</summary>
         public static ConfigEntry<int> BulletMinFramesBetweenSpawns;
 
-        /// <summary>Min fragments from bullet.</summary>
+        /// <summary>Min fragments per bullet impact.</summary>
         public static ConfigEntry<int> BulletFragmentsMin;
 
-        /// <summary>Max fragments from bullet (exclusive).</summary>
+        /// <summary>Max fragments per bullet impact (exclusive).</summary>
         public static ConfigEntry<int> BulletFragmentsMax;
 
         /// <summary>Base speed for bullet fragments (m/s).</summary>
         public static ConfigEntry<float> BulletBaseSpeed;
 
-        /// <summary>Min sparks from bullet (legacy, use ImpactStreakSparks instead).</summary>
+        /// <summary>Legacy: min sparks from bullet.</summary>
         public static ConfigEntry<int> BulletSparksMin;
 
-        /// <summary>Max sparks from bullet (legacy, use ImpactStreakSparks instead).</summary>
+        /// <summary>Legacy: max sparks from bullet.</summary>
         public static ConfigEntry<int> BulletSparksMax;
 
-        /// <summary>Scale multiplier for bullet shrapnel.</summary>
+        /// <summary>Scale multiplier for bullet shrapnel size.</summary>
         public static ConfigEntry<float> BulletScaleMultiplier;
 
-        /// <summary>Heat multiplier for bullet shrapnel.</summary>
+        /// <summary>Heat multiplier for bullet shrapnel glow.</summary>
         public static ConfigEntry<float> BulletHeatMultiplier;
 
-        //  EXPLOSIONS: CLASSIFICATION
+        //  EXPLOSIONS — CLASSIFICATION
 
         /// <summary>Tolerance for explosion parameter comparison (+/- epsilon).</summary>
         public static ConfigEntry<float> ClassifyEpsilon;
 
-        // ── Dynamite ──
+        //  Dynamite 
         public static ConfigEntry<float> DynamiteRange;
         public static ConfigEntry<float> DynamiteStructuralDamage;
         public static ConfigEntry<int> DynamitePrimaryMin;
@@ -93,7 +145,7 @@ namespace ScavShrapnelMod
         public static ConfigEntry<int> DynamiteVisualMin;
         public static ConfigEntry<int> DynamiteVisualMax;
 
-        // ── Turret ──
+        //  Turret 
         public static ConfigEntry<float> TurretRange;
         public static ConfigEntry<float> TurretVelocity;
         public static ConfigEntry<int> TurretPrimaryMin;
@@ -102,7 +154,7 @@ namespace ScavShrapnelMod
         public static ConfigEntry<int> TurretVisualMin;
         public static ConfigEntry<int> TurretVisualMax;
 
-        // ── Mine (fallback) ──
+        //  Mine 
         public static ConfigEntry<int> MinePrimaryMin;
         public static ConfigEntry<int> MinePrimaryMax;
         public static ConfigEntry<float> MineSpeed;
@@ -111,13 +163,13 @@ namespace ScavShrapnelMod
 
         //  GROUND DEBRIS
 
-        /// <summary>Multiplier for ground debris scan radius relative to explosion range.</summary>
+        /// <summary>Scan radius multiplier relative to explosion range.</summary>
         public static ConfigEntry<float> GroundDebrisRangeMultiplier;
 
-        /// <summary>Multiplier for ground debris particle count.</summary>
+        /// <summary>Particle count multiplier for ground debris.</summary>
         public static ConfigEntry<float> GroundDebrisCountMultiplier;
 
-        /// <summary>Shockwave propagation speed for ground debris delay (world units/sec).</summary>
+        /// <summary>Shockwave propagation speed (world units/sec).</summary>
         public static ConfigEntry<float> GroundDebrisShockwaveSpeed;
 
         /// <summary>Base particle budget per exposed block face.</summary>
@@ -126,38 +178,46 @@ namespace ScavShrapnelMod
         /// <summary>Max total ground debris particles per explosion.</summary>
         public static ConfigEntry<int> GroundDebrisMaxTotal;
 
-        /// <summary>Multiplier for block debris particle count from destroyed blocks.</summary>
+        /// <summary>Multiplier for block debris particles from destroyed blocks.</summary>
         public static ConfigEntry<float> BlockDebrisCountMultiplier;
 
-        //  SPARKS (SHRAPNEL PROJECTILE IMPACTS)
+        //  SPARKS — SHRAPNEL PROJECTILE IMPACTS
 
-        /// <summary>Min sparks on metal impact.</summary>
+        /// <summary>Min sparks when shrapnel hits metal block.</summary>
         public static ConfigEntry<int> MetalImpactSparksMin;
 
-        /// <summary>Max sparks on metal impact (exclusive).</summary>
+        /// <summary>Max sparks when shrapnel hits metal block (exclusive).</summary>
         public static ConfigEntry<int> MetalImpactSparksMax;
 
-        /// <summary>Min sparks on ricochet.</summary>
+        /// <summary>Min sparks on ricochet off metal.</summary>
         public static ConfigEntry<int> RicochetSparksMin;
 
-        /// <summary>Max sparks on ricochet (exclusive).</summary>
+        /// <summary>Max sparks on ricochet off metal (exclusive).</summary>
         public static ConfigEntry<int> RicochetSparksMax;
 
-        /// <summary>Min debris particles on ricochet.</summary>
+        /// <summary>Min debris particles from ricochet scatter.</summary>
         public static ConfigEntry<int> RicochetDebrisMin;
 
-        /// <summary>Max debris particles on ricochet (exclusive).</summary>
+        /// <summary>Max debris particles from ricochet scatter (exclusive).</summary>
         public static ConfigEntry<int> RicochetDebrisMax;
+
+        //  SPARK DIVERSITY
+
+        /// <summary>Fraction of sparks that are thin/fast needles (0.0-1.0).</summary>
+        public static ConfigEntry<float> SparkNeedleFraction;
+
+        /// <summary>Fraction of sparks that are medium trailing (0.0-1.0).</summary>
+        public static ConfigEntry<float> SparkMediumFraction;
 
         //  ADVANCED EXPLOSION EFFECTS
 
-        /// <summary>Enable smoke column effect.</summary>
+        /// <summary>Enable rising smoke column after explosions.</summary>
         public static ConfigEntry<bool> EnableSmokeColumn;
 
-        /// <summary>Enable fire embers effect.</summary>
+        /// <summary>Enable glowing fire embers that scatter and land.</summary>
         public static ConfigEntry<bool> EnableFireEmbers;
 
-        /// <summary>Enable crater dust effect.</summary>
+        /// <summary>Enable lingering dust cloud at crater.</summary>
         public static ConfigEntry<bool> EnableCraterDust;
 
         /// <summary>Smoke column particle count multiplier.</summary>
@@ -169,7 +229,7 @@ namespace ScavShrapnelMod
         /// <summary>Fire embers count multiplier.</summary>
         public static ConfigEntry<float> FireEmbersCountMultiplier;
 
-        /// <summary>Crater dust count multiplier.</summary>
+        /// <summary>Crater dust particle count multiplier.</summary>
         public static ConfigEntry<float> CraterDustCountMultiplier;
 
         /// <summary>Crater dust lifetime multiplier.</summary>
@@ -177,10 +237,10 @@ namespace ScavShrapnelMod
 
         //  ENHANCED BULLET IMPACT EFFECTS
 
-        /// <summary>Min streak sparks on regular impact.</summary>
+        /// <summary>Min fast streak sparks on regular metal impact.</summary>
         public static ConfigEntry<int> ImpactStreakSparksMin;
 
-        /// <summary>Max streak sparks on regular impact.</summary>
+        /// <summary>Max fast streak sparks on regular metal impact.</summary>
         public static ConfigEntry<int> ImpactStreakSparksMax;
 
         /// <summary>Min streak sparks on ricochet.</summary>
@@ -189,36 +249,62 @@ namespace ScavShrapnelMod
         /// <summary>Max streak sparks on ricochet.</summary>
         public static ConfigEntry<int> RicochetStreakSparksMax;
 
-        /// <summary>Min floating sparks on impact.</summary>
+        /// <summary>Min slow floating sparks on impact.</summary>
         public static ConfigEntry<int> ImpactFloatSparksMin;
 
-        /// <summary>Max floating sparks on impact.</summary>
+        /// <summary>Max slow floating sparks on impact.</summary>
         public static ConfigEntry<int> ImpactFloatSparksMax;
 
-        /// <summary>Min metal chips on impact.</summary>
+        /// <summary>Min metal chip debris on impact.</summary>
         public static ConfigEntry<int> ImpactMetalChipsMin;
 
-        /// <summary>Max metal chips on impact.</summary>
+        /// <summary>Max metal chip debris on impact.</summary>
         public static ConfigEntry<int> ImpactMetalChipsMax;
+
+        //  MICRO SHRAPNEL
+
+        /// <summary>Enable micro shrapnel spawning during explosions.</summary>
+        public static ConfigEntry<bool> EnableMicroShrapnel;
+
+        /// <summary>Min skin damage from micro shrapnel.</summary>
+        public static ConfigEntry<float> MicroDamageMin;
+
+        /// <summary>Max skin damage from micro shrapnel.</summary>
+        public static ConfigEntry<float> MicroDamageMax;
+
+        /// <summary>Min bleed from micro shrapnel hit.</summary>
+        public static ConfigEntry<float> MicroBleedMin;
+
+        /// <summary>Max bleed from micro shrapnel hit.</summary>
+        public static ConfigEntry<float> MicroBleedMax;
+
+        /// <summary>Shock multiplier for micro shrapnel.</summary>
+        public static ConfigEntry<float> MicroShockMultiplier;
+
+        /// <summary>Adrenaline base from micro shrapnel hit.</summary>
+        public static ConfigEntry<float> MicroAdrenalineBase;
+
+        /// <summary>Visual sparks per micro shrapnel piece.</summary>
+        public static ConfigEntry<int> MicroSparksPerPiece;
 
         //  DEBRIS LIFETIME
 
-        /// <summary>Metal debris lifetime (sec).</summary>
+        /// <summary>Metal debris lifetime (seconds).</summary>
         public static ConfigEntry<float> DebrisLifetimeMetal;
 
-        /// <summary>HeavyMetal debris lifetime (sec).</summary>
+        /// <summary>Heavy metal debris lifetime (seconds).</summary>
         public static ConfigEntry<float> DebrisLifetimeHeavyMetal;
 
-        /// <summary>Stone debris lifetime (sec).</summary>
+        /// <summary>Stone debris lifetime (seconds).</summary>
         public static ConfigEntry<float> DebrisLifetimeStone;
 
-        /// <summary>Wood debris lifetime (sec).</summary>
+        /// <summary>Wood debris lifetime (seconds).</summary>
         public static ConfigEntry<float> DebrisLifetimeWood;
 
-        /// <summary>Electronic debris lifetime (sec).</summary>
+        /// <summary>Electronic debris lifetime (seconds).</summary>
         public static ConfigEntry<float> DebrisLifetimeElectronic;
 
-        /// <summary>Stuck shrapnel lifetime (sec).</summary>
+        /// <summary>Shrapnel stuck in wall lifetime (seconds).</summary>
         public static ConfigEntry<float> StuckLifetime;
 
         //  INTERACT
@@ -226,20 +312,51 @@ namespace ScavShrapnelMod
         /// <summary>Max distance to destroy debris by clicking (tiles).</summary>
         public static ConfigEntry<float> MaxInteractDistance;
 
-        //  BIND METHOD
+        //  BIND
 
         /// <summary>
-        /// Initializes all config entries. Call from Plugin.Awake().
+        /// Initializes all config entries from BepInEx ConfigFile.
+        /// Call from Plugin.Awake() before any other mod code runs.
+        ///
+        /// VERSION HANDLING:
+        /// 1. Config doesn't exist = create fresh with current version
+        /// 2. Version matches = load normally
+        /// 3. Version differs = backup old, delete, create fresh, notify user
         /// </summary>
         public static void Bind(ConfigFile cfg)
         {
-            // ── Performance ──
+            string currentVersion = Plugin.Version;
+
+            bool needsReset = CheckVersionMismatch(cfg, currentVersion);
+
+            if (needsReset)
+            {
+                BackupAndResetConfig(cfg, currentVersion);
+            }
+
+            //  Internal version stamp 
+            _modVersion = cfg.Bind("Internal", "_ModVersion", currentVersion,
+                new ConfigDescription(
+                    "Mod version that created this config. " +
+                    "When mod updates, old config is backed up and reset. " +
+                    "Do NOT edit manually.",
+                    null,
+                    new object[] { "HideInUI" }));
+
+            if (needsReset)
+            {
+                _modVersion.Value = currentVersion;
+            }
+
+            //  Performance 
             MaxAliveDebris = cfg.Bind("Performance", "MaxAliveDebris", 500,
                 new ConfigDescription("Max alive physical shrapnel objects. Oldest removed first.",
                     new AcceptableValueRange<int>(50, 2000)));
 
             MaxAliveVisualParticles = cfg.Bind("Performance", "MaxAliveVisualParticles", 5000,
-                new ConfigDescription("Max alive visual particles (ash, dust, sparks). Oldest removed first.",
+                new ConfigDescription(
+                    "Max alive visual particles in fallback mode. " +
+                    "When ParticleSystem pools are active, this only limits fallback GameObjects.",
                     new AcceptableValueRange<int>(500, 15000)));
 
             SpawnCountMultiplier = cfg.Bind("Performance", "SpawnCountMultiplier", 1f,
@@ -264,7 +381,26 @@ namespace ScavShrapnelMod
             DebugLogging = cfg.Bind("Performance", "DebugLogging", false,
                 "Enable Debug.Log for each explosion.");
 
-            // ── Bullets ──
+            //  Particle Pools 
+            PoolDebrisMaxParticles = cfg.Bind("Performance.Pools", "DebrisMaxParticles", 6000,
+                new ConfigDescription(
+                    "Max concurrent particles in DebrisPool (alpha-blended). " +
+                    "Handles ground chunks, dust, smoke, ash, metal chips, steam.",
+                    new AcceptableValueRange<int>(1000, 20000)));
+
+            PoolGlowMaxParticles = cfg.Bind("Performance.Pools", "GlowMaxParticles", 2500,
+                new ConfigDescription(
+                    "Max concurrent particles in GlowPool (additive). " +
+                    "Handles embers, fire, burning chunks.",
+                    new AcceptableValueRange<int>(500, 10000)));
+
+            PoolSparkMaxParticles = cfg.Bind("Performance.Pools", "SparkMaxParticles", 2000,
+                new ConfigDescription(
+                    "Max concurrent particles in SparkPool (additive + stretch). " +
+                    "Handles streak sparks, core sparks, micro shrapnel visuals.",
+                    new AcceptableValueRange<int>(500, 8000)));
+
+            //  Bullets 
             EnableBulletFragments = cfg.Bind("Bullets", "EnableFragments", true,
                 "Enable physical shrapnel fragments from bullet impacts on metal.");
 
@@ -272,7 +408,7 @@ namespace ScavShrapnelMod
                 "Enable visual impact effects (flash, sparks, metal chips) on metal.");
 
             BulletMinFramesBetweenSpawns = cfg.Bind("Bullets", "MinFramesBetweenSpawns", 1,
-                new ConfigDescription("Min frames between bullet shrapnel spawns. Lower = more responsive.",
+                new ConfigDescription("Min frames between bullet shrapnel spawns.",
                     new AcceptableValueRange<int>(0, 30)));
 
             BulletFragmentsMin = cfg.Bind("Bullets", "FragmentsMin", 1,
@@ -300,11 +436,11 @@ namespace ScavShrapnelMod
             BulletHeatMultiplier = cfg.Bind("Bullets", "HeatMultiplier", 0.5f,
                 "Heat multiplier for bullet shrapnel.");
 
-            // ── Explosions Classification ──
+            //  Explosions Classification 
             ClassifyEpsilon = cfg.Bind("Explosions", "ClassifyEpsilon", 0.5f,
                 "Tolerance for explosion parameter comparison.");
 
-            // Dynamite
+            //  Dynamite 
             DynamiteRange = cfg.Bind("Explosions.Dynamite", "Range", 18f,
                 "Expected dynamite range for classification.");
             DynamiteStructuralDamage = cfg.Bind("Explosions.Dynamite", "StructuralDamage", 2000f,
@@ -320,7 +456,7 @@ namespace ScavShrapnelMod
             DynamiteVisualMax = cfg.Bind("Explosions.Dynamite", "VisualMax", 500,
                 "Max visual shrapnel count (exclusive).");
 
-            // Turret
+            //  Turret 
             TurretRange = cfg.Bind("Explosions.Turret", "Range", 9f,
                 "Expected turret range for classification.");
             TurretVelocity = cfg.Bind("Explosions.Turret", "Velocity", 15f,
@@ -336,7 +472,7 @@ namespace ScavShrapnelMod
             TurretVisualMax = cfg.Bind("Explosions.Turret", "VisualMax", 200,
                 "Max visual shrapnel count (exclusive).");
 
-            // Mine
+            //  Mine 
             MinePrimaryMin = cfg.Bind("Explosions.Mine", "PrimaryMin", 50,
                 "Min primary shrapnel count.");
             MinePrimaryMax = cfg.Bind("Explosions.Mine", "PrimaryMax", 85,
@@ -348,7 +484,7 @@ namespace ScavShrapnelMod
             MineVisualMax = cfg.Bind("Explosions.Mine", "VisualMax", 280,
                 "Max visual shrapnel count (exclusive).");
 
-            // ── Ground Debris ──
+            //  Ground Debris 
             GroundDebrisRangeMultiplier = cfg.Bind("GroundDebris", "RangeMultiplier", 3.5f,
                 new ConfigDescription("Scan radius multiplier relative to explosion range.",
                     new AcceptableValueRange<float>(1f, 8f)));
@@ -358,25 +494,24 @@ namespace ScavShrapnelMod
                     new AcceptableValueRange<float>(0.5f, 6f)));
 
             GroundDebrisShockwaveSpeed = cfg.Bind("GroundDebris", "ShockwaveSpeed", 40f,
-                new ConfigDescription("Shockwave propagation speed (world units/sec). " +
-                    "Controls delay before distant debris appears. Higher = more instant.",
+                new ConfigDescription(
+                    "Shockwave propagation speed (world units/sec). " +
+                    "Controls delay before distant debris appears.",
                     new AcceptableValueRange<float>(10f, 200f)));
 
-            GroundDebrisBudgetPerBlock = cfg.Bind("GroundDebris", "BudgetPerBlock", 150,
-                new ConfigDescription("Base particle budget per surface block. " +
-                    "Split evenly across exposed faces. Multiplied by intensity and CountMultiplier.",
+            GroundDebrisBudgetPerBlock = cfg.Bind("GroundDebris", "BudgetPerBlock", 75,
+                new ConfigDescription("Base particle budget per surface block.",
                     new AcceptableValueRange<int>(4, 400)));
 
-            GroundDebrisMaxTotal = cfg.Bind("GroundDebris", "MaxTotal", 4000,
-                new ConfigDescription("Max total ground debris particles per explosion. " +
-                    "Center-outward scan ensures symmetric distribution.",
+            GroundDebrisMaxTotal = cfg.Bind("GroundDebris", "MaxTotal", 1500,
+                new ConfigDescription("Max total ground debris particles per explosion.",
                     new AcceptableValueRange<int>(200, 12000)));
 
             BlockDebrisCountMultiplier = cfg.Bind("GroundDebris", "BlockDebrisCountMultiplier", 1f,
-                new ConfigDescription("Multiplier for block debris particles from destroyed blocks.",
+                new ConfigDescription("Multiplier for block debris from destroyed blocks.",
                     new AcceptableValueRange<float>(0.1f, 5f)));
 
-            // ── Sparks (Shrapnel Projectile Impacts) ──
+            //  Sparks 
             MetalImpactSparksMin = cfg.Bind("Sparks", "MetalImpactMin", 6,
                 new ConfigDescription("Min sparks when shrapnel hits metal.",
                     new AcceptableValueRange<int>(1, 20)));
@@ -401,7 +536,19 @@ namespace ScavShrapnelMod
                 new ConfigDescription("Max debris particles on ricochet (exclusive).",
                     new AcceptableValueRange<int>(1, 15)));
 
-            // ── Advanced Explosion Effects ──
+            //  Spark Diversity 
+            SparkNeedleFraction = cfg.Bind("Sparks.Diversity", "NeedleFraction", 0.40f,
+                new ConfigDescription(
+                    "Fraction of sparks that are thin/fast needles.",
+                    new AcceptableValueRange<float>(0.1f, 0.8f)));
+
+            SparkMediumFraction = cfg.Bind("Sparks.Diversity", "MediumFraction", 0.35f,
+                new ConfigDescription(
+                    "Fraction of sparks that are medium trailing. " +
+                    "Remainder (1 - needle - medium) are thick/hot globs.",
+                    new AcceptableValueRange<float>(0.1f, 0.7f)));
+
+            //  Advanced Explosion Effects 
             EnableSmokeColumn = cfg.Bind("Effects.Explosion", "EnableSmokeColumn", true,
                 "Enable rising smoke column after explosions.");
 
@@ -431,7 +578,7 @@ namespace ScavShrapnelMod
                 new ConfigDescription("Crater dust lifetime multiplier.",
                     new AcceptableValueRange<float>(0.5f, 3f)));
 
-            // ── Enhanced Bullet Impact Effects ──
+            //  Enhanced Bullet Impact Effects 
             ImpactStreakSparksMin = cfg.Bind("Effects.BulletImpact", "StreakSparksMin", 12,
                 new ConfigDescription("Min fast streak sparks on metal impact.",
                     new AcceptableValueRange<int>(3, 30)));
@@ -464,7 +611,39 @@ namespace ScavShrapnelMod
                 new ConfigDescription("Max metal chip debris on impact.",
                     new AcceptableValueRange<int>(1, 20)));
 
-            // ── Debris Lifetime ──
+            //  Micro Shrapnel 
+            EnableMicroShrapnel = cfg.Bind("Micro", "Enable", true,
+                "Enable micro shrapnel spawning during explosions.");
+
+            MicroDamageMin = cfg.Bind("Micro", "DamageMin", 1f,
+                new ConfigDescription("Min skin damage from micro shrapnel.",
+                    new AcceptableValueRange<float>(0f, 10f)));
+
+            MicroDamageMax = cfg.Bind("Micro", "DamageMax", 3f,
+                new ConfigDescription("Max skin damage from micro shrapnel.",
+                    new AcceptableValueRange<float>(0.5f, 15f)));
+
+            MicroBleedMin = cfg.Bind("Micro", "BleedMin", 0.2f,
+                new ConfigDescription("Min bleed from micro shrapnel.",
+                    new AcceptableValueRange<float>(0f, 5f)));
+
+            MicroBleedMax = cfg.Bind("Micro", "BleedMax", 0.8f,
+                new ConfigDescription("Max bleed from micro shrapnel.",
+                    new AcceptableValueRange<float>(0.1f, 8f)));
+
+            MicroShockMultiplier = cfg.Bind("Micro", "ShockMultiplier", 0.5f,
+                new ConfigDescription("Shock multiplier for micro hits.",
+                    new AcceptableValueRange<float>(0f, 2f)));
+
+            MicroAdrenalineBase = cfg.Bind("Micro", "AdrenalineBase", 5f,
+                new ConfigDescription("Adrenaline base from micro hit.",
+                    new AcceptableValueRange<float>(0f, 30f)));
+
+            MicroSparksPerPiece = cfg.Bind("Micro", "SparksPerPiece", 3,
+                new ConfigDescription("Visual sparks per micro shrapnel piece.",
+                    new AcceptableValueRange<int>(1, 8)));
+
+            //  Debris Lifetime 
             DebrisLifetimeMetal = cfg.Bind("Lifetime", "Metal", 900f,
                 "Metal debris lifetime (seconds). 900 = 15 minutes.");
             DebrisLifetimeHeavyMetal = cfg.Bind("Lifetime", "HeavyMetal", 1200f,
@@ -478,9 +657,156 @@ namespace ScavShrapnelMod
             StuckLifetime = cfg.Bind("Lifetime", "Stuck", 60f,
                 "Shrapnel stuck in wall lifetime (seconds).");
 
-            // ── Interact ──
+            //  Interact 
             MaxInteractDistance = cfg.Bind("Interact", "MaxClickDistance", 3f,
                 "Max distance to destroy debris by clicking (tiles).");
+
+            //  Flush to disk 
+            cfg.Save();
+        }
+
+        //  VERSION CHECK & BACKUP
+
+        /// <summary>
+        /// Checks config file on disk for version mismatch BEFORE BepInEx binds entries.
+        ///
+        /// WHY read raw file: Once Bind() is called, BepInEx caches the value.
+        /// We need to detect mismatch before that to decide whether to delete
+        /// the file and let Bind() create fresh defaults.
+        /// </summary>
+        /// <returns>true if config exists with different/missing version</returns>
+        private static bool CheckVersionMismatch(ConfigFile cfg, string currentVersion)
+        {
+            string configPath = cfg.ConfigFilePath;
+
+            // No config = fresh install, create normally
+            if (!File.Exists(configPath))
+            {
+                return false;
+            }
+
+            try
+            {
+                string[] lines = File.ReadAllLines(configPath);
+                string savedVersion = null;
+
+                for (int i = 0; i < lines.Length; i++)
+                {
+                    string trimmed = lines[i].Trim();
+
+                    // WHY: BepInEx config format is "Key = Value"
+                    // We look for "_ModVersion = X.Y.Z"
+                    if (trimmed.StartsWith("_ModVersion", StringComparison.OrdinalIgnoreCase))
+                    {
+                        int eqIndex = trimmed.IndexOf('=');
+                        if (eqIndex > 0 && eqIndex < trimmed.Length - 1)
+                        {
+                            savedVersion = trimmed.Substring(eqIndex + 1).Trim();
+                            break;
+                        }
+                    }
+                }
+
+                // No version key = pre-versioning config, needs reset
+                if (string.IsNullOrEmpty(savedVersion))
+                {
+                    PreviousVersion = "pre-0.8.0";
+                    return true;
+                }
+
+                // Version matches = no reset
+                if (string.Equals(savedVersion, currentVersion, StringComparison.Ordinal))
+                {
+                    return false;
+                }
+
+                // Version differs = needs reset
+                PreviousVersion = savedVersion;
+                return true;
+            }
+            catch (Exception e)
+            {
+                Plugin.Log?.LogWarning($"[Config] Version check failed: {e.Message}");
+                // WHY: On read error, don't destroy user's config
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Backs up old config and deletes original so BepInEx creates fresh defaults.
+        ///
+        /// Backup naming: ScavShrapnelMod.cfg.backup.{oldVersion}
+        /// Collision handling: appends timestamp if backup already exists.
+        /// </summary>
+        private static void BackupAndResetConfig(ConfigFile cfg, string currentVersion)
+        {
+            string configPath = cfg.ConfigFilePath;
+            string versionSuffix = PreviousVersion ?? "unknown";
+
+            // WHY: Sanitize version string for filename safety
+            // (replace dots, slashes, other invalid chars)
+            foreach (char c in Path.GetInvalidFileNameChars())
+            {
+                versionSuffix = versionSuffix.Replace(c, '_');
+            }
+
+            string backupName = $"{configPath}.backup.{versionSuffix}";
+
+            // Collision: add timestamp
+            if (File.Exists(backupName))
+            {
+                string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                backupName = $"{configPath}.backup.{versionSuffix}.{timestamp}";
+            }
+
+            try
+            {
+                File.Copy(configPath, backupName, overwrite: false);
+                BackupPath = backupName;
+
+                // WHY: Delete original so BepInEx Bind() writes fresh defaults.
+                // ConfigFile internally checks File.Exists during Reload().
+                File.Delete(configPath);
+
+                // WHY: BepInEx ConfigFile caches entries from file read during construction.
+                // After deleting the file, we need to clear the internal cache
+                // so Bind() treats all keys as new and writes defaults.
+                // Reload() re-reads from disk (now empty/missing = clean state).
+                cfg.Reload();
+
+                WasReset = true;
+
+                Plugin.Log?.LogInfo(
+                    $"[Config] Version changed: {PreviousVersion} = {currentVersion}");
+                Plugin.Log?.LogInfo(
+                    $"[Config] Old config backed up: {Path.GetFileName(backupName)}");
+                Plugin.Log?.LogInfo(
+                    $"[Config] Fresh config will be created with v{currentVersion} defaults.");
+            }
+            catch (Exception e)
+            {
+                Plugin.Log?.LogError($"[Config] Backup/reset failed: {e.Message}");
+                WasReset = false;
+            }
+        }
+
+        /// <summary>
+        /// Returns user-friendly notification about config reset.
+        /// Returns null if no reset occurred.
+        ///
+        /// WHY: Displayed via Debug.Log which ConsoleScript picks up through
+        /// Application.logMessageReceived = ApplicationLogCallback = LogToConsole.
+        /// </summary>
+        public static string GetResetNotification()
+        {
+            if (!WasReset) return null;
+
+            string backupFile = BackupPath != null
+                ? Path.GetFileName(BackupPath)
+                : "unknown";
+
+            return $"[{Plugin.Name}] Config reset: v{PreviousVersion} = v{Plugin.Version}. " +
+                   $"Old settings backed up to: {backupFile}";
         }
     }
 }

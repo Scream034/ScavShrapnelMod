@@ -188,8 +188,8 @@ namespace ScavShrapnelMod.Projectiles
             }
 
             float dt = Time.deltaTime;
-            float t = _lifetime / _maxLifetime; // 1→0 over lifetime
-            float age = 1f - t;                  // 0→1 over lifetime
+            float t = _lifetime / _maxLifetime; // 1=0 over lifetime
+            float age = 1f - t;                  // 0=1 over lifetime
 
             //  Gravity
             _velocity.y -= _gravity * dt;

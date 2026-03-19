@@ -5,7 +5,7 @@ namespace ScavShrapnelMod.Effects
     /// Статическое хранилище последнего ExplosionParams.
     /// 
     /// Мост между Harmony Prefix и Postfix:
-    /// Prefix записывает → Postfix/другие системы читают.
+    /// Prefix записывает = Postfix/другие системы читают.
     /// 
     /// ExplosionParams — struct (value type), Record() создаёт копию — thread-safe.
     /// </summary>

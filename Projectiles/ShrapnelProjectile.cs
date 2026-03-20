@@ -8,14 +8,23 @@ namespace ScavShrapnelMod.Projectiles
     /// <summary>
     /// Main shrapnel component. FSM: Flying → Stuck / Debris.
     ///
-    /// MULTIPLAYER: This component exists ONLY on the server (host).
-    /// Clients receive visual mirrors (ClientMirrorShrapnel) via ShrapnelNetSync.
-    /// NetSyncId = 0 in singleplayer; assigned by ShrapnelNetSync.ServerRegister in MP.
+    /// MULTIPLAYER:
+    ///   Server: IsServerAuthoritative=true (default). Full damage, block breaking, net sync.
+    ///   Client: IsServerAuthoritative=false. Real physics for bouncing, all damage gated.
+    ///           State transitions happen locally for visuals; server MSG_STATE corrects
+    ///           final rest position. Server MSG_DESTROY handles cleanup.
+    ///   Singleplayer: IsServerAuthoritative=true, NetSyncId=0.
     /// </summary>
     public sealed class ShrapnelProjectile : MonoBehaviour
     {
         public enum ShrapnelType { Metal, Stone, Wood, Electronic, HeavyMetal }
         private enum State { Flying, Stuck, Debris }
+
+        /// <summary>
+        /// External state enum for net sync. Maps to internal State.
+        /// Avoids exposing private enum while allowing ForceToState calls.
+        /// </summary>
+        public enum ExternalState { Flying = 0, Stuck = 1, Debris = 2 }
 
         //  CONSTANTS
 
@@ -32,12 +41,13 @@ namespace ScavShrapnelMod.Projectiles
         private const float MinBlockImpactSpeed = 3f;
         private const float SparkImpactSpeed = 9f;
 
-        // Visual constants sourced from ShrapnelVisuals (single source of truth).
-        // See ShrapnelVisuals for documentation on each value.
         private const float HeatCoolRate = ShrapnelVisuals.HeatCoolRate;
         private const float HotThreshold = ShrapnelVisuals.HotThreshold;
         private const float OutlineScaleMultiplier = ShrapnelVisuals.OutlineScale;
         private const float OutlineAlphaBase = ShrapnelVisuals.OutlineAlphaBase;
+
+        /// <summary>Duration of client-side fade-out for flying shards on MSG_DESTROY.</summary>
+        private const float ClientFadeDuration = 0.15f;
 
         //  PUBLIC FIELDS
 
@@ -52,17 +62,28 @@ namespace ScavShrapnelMod.Projectiles
         /// <summary>
         /// Deterministic seed for per-projectile RNG.
         /// Set by ShrapnelFactory from the explosion's RNG chain.
-        /// Ensures identical DeterministicRoll sequences on host and client
-        /// (previously used GetInstanceID() ^ Time.frameCount which diverges).
-        /// Set BEFORE Start() runs — factory sets field immediately after AddComponent.
         /// </summary>
         public int Seed;
 
         /// <summary>
         /// Network sync ID assigned by ShrapnelNetSync.ServerRegister.
-        /// 0 = singleplayer (no sync). Used by OnDestroy to unregister.
+        /// 0 = singleplayer (no sync).
         /// </summary>
         [NonSerialized] public ushort NetSyncId;
+
+        /// <summary>
+        /// True = full server behavior (damage, world modification, sound, net sync).
+        /// False = client shard (real physics for visuals, all damage/state gated).
+        /// WHY: Client shards need real Rigidbody2D for wall bouncing but must not
+        /// deal damage, break blocks, embed in limbs, or send net sync messages.
+        /// </summary>
+        [NonSerialized] public bool IsServerAuthoritative = true;
+
+        /// <summary>
+        /// Access to current FSM state for net sync.
+        /// 0=Flying, 1=Stuck, 2=Debris.
+        /// </summary>
+        public int CurrentState => (int)state;
 
         //  PRIVATE FIELDS
 
@@ -92,12 +113,12 @@ namespace ScavShrapnelMod.Projectiles
         private bool _outlineApplied;
         private Vector3 _originalScale;
 
-        /// <summary>
-        /// Per-instance deterministic RNG. Initialized from Seed in Start().
-        /// Using Seed (set by factory) instead of GetInstanceID() ^ frameCount
-        /// ensures identical random sequences host↔client.
-        /// </summary>
         private System.Random _rng;
+
+        // Client fade-out state
+        private bool _clientFading;
+        private float _clientFadeTimer;
+        private Vector3 _clientFadeScale;
 
         //  PROPERTIES
 
@@ -146,10 +167,9 @@ namespace ScavShrapnelMod.Projectiles
 
         private void Update()
         {
-            // Guard: sr can be null during destruction
             if (sr == null) return;
 
-            // Self-heal corrupted material (AssetBundle unload can null the shader)
+            // Self-heal corrupted material
             if (sr.sharedMaterial != null && sr.sharedMaterial.shader == null)
             {
                 sr.sharedMaterial = Heat > HotThreshold
@@ -166,6 +186,33 @@ namespace ScavShrapnelMod.Projectiles
                 trail.sharedMaterial = ShrapnelVisuals.TrailMaterial;
             }
 
+            // Client fade-out takes priority
+            if (_clientFading)
+            {
+                _clientFadeTimer += Time.deltaTime;
+                float t = Mathf.Clamp01(_clientFadeTimer / ClientFadeDuration);
+
+                float fadeScale = 1f - t;
+                _transform.localScale = _clientFadeScale * Mathf.Max(fadeScale, 0.01f);
+                if (sr != null)
+                {
+                    Color c = sr.color;
+                    c.a *= 1f - t;
+                    sr.color = c;
+                }
+
+                // Continue physics during fade for smooth visual
+                // Rigidbody2D handles movement automatically
+
+                if (t >= 1f)
+                {
+                    if (!IsServerAuthoritative && NetSyncId != 0)
+                        Net.ShrapnelNetSync.NotifyClientShardDestroyed(NetSyncId);
+                    Destroy(gameObject);
+                }
+                return;
+            }
+
             int frame = Time.frameCount;
             switch (state)
             {
@@ -177,15 +224,23 @@ namespace ScavShrapnelMod.Projectiles
 
         private void OnDestroy()
         {
-            if (NetSyncId != 0)
+            if (sr != null && lastEmissionHeat > 0f)
+                ParticleHelper.ClearEmission(sr);
+
+            if (IsServerAuthoritative && NetSyncId != 0)
                 Net.ShrapnelNetSync.ServerUnregister(NetSyncId);
+
+            if (!IsServerAuthoritative && NetSyncId != 0)
+                Net.ShrapnelNetSync.NotifyClientShardDestroyed(NetSyncId);
         }
 
         //  FSM UPDATES
 
         private void UpdateFlying(int frame)
         {
-            if (_physicsDelay > 0f)
+            // WHY: Physics delay only on server. Client shards have colliders
+            // enabled from creation for immediate wall bouncing.
+            if (IsServerAuthoritative && _physicsDelay > 0f)
             {
                 _physicsDelay -= Time.deltaTime;
                 if (_physicsDelay <= 0f && _col != null)
@@ -219,9 +274,6 @@ namespace ScavShrapnelMod.Projectiles
             { Destroy(gameObject); return; }
 
             if (!_outlineApplied) { CreateOutline(); _outlineApplied = true; }
-            // WHY: ApplyVisualDecay now returns true if shard was destroyed
-            // (visually depleted). Must exit immediately — subsequent calls
-            // to PulseOutline/CheckSupportAndFall would access destroyed GO.
             if (ApplyVisualDecay()) return;
 
             if (frame % 5 == frameSlot % 5) PulseOutline();
@@ -235,9 +287,6 @@ namespace ScavShrapnelMod.Projectiles
             { Destroy(gameObject); return; }
 
             if (!_outlineApplied) { CreateOutline(); _outlineApplied = true; }
-            // WHY: ApplyVisualDecay now returns true if shard was destroyed
-            // (visually depleted). Must exit immediately to avoid accessing
-            // components on a destroyed GameObject.
             if (ApplyVisualDecay()) return;
 
             if (frame % 5 == frameSlot % 5) PulseOutline();
@@ -250,28 +299,15 @@ namespace ScavShrapnelMod.Projectiles
         /// <summary>
         /// Applies scale and alpha decay during the final 30% of shard lifetime.
         /// Returns true if the shard was destroyed (caller must return immediately).
-        ///
-        /// WHY EARLY DESTROY: Without this, the collider remains active while
-        /// the shard is visually invisible (~21% scale, ~11% alpha). Stuck shards
-        /// block physics; Debris shards deal step-on damage via OnTriggerEnter2D.
-        /// Players take damage from shards they cannot see — reported in both
-        /// singleplayer and multiplayer.
-        ///
-        /// WHY COLLIDER DISABLE: Safety margin before destroy threshold.
-        /// At decayFactor &lt; 0.15 (~32% scale, ~24% alpha) the shard provides
-        /// no visual feedback for the damage it deals. Disabling the collider
-        /// earlier prevents the invisible-damage window entirely.
+        /// Disables collider before shard becomes invisible to prevent phantom damage.
         /// </summary>
-        /// <returns>True if the shard was destroyed and caller should return.</returns>
         private bool ApplyVisualDecay()
         {
             float t = NormalizedLifetime;
             if (t > 0.3f) return false;
 
             // WHY: Shard is visually depleted — destroy to prevent invisible collider
-            // dealing damage or blocking physics. At NormalizedLifetime=0.02:
-            // scale ≈ 21%, alpha ≈ 11% — effectively invisible to the player.
-            // For 300s debris lifetime, this triggers at ~294s (6s early — imperceptible).
+            // dealing damage or blocking physics.
             if (t <= 0.02f)
             {
                 Destroy(gameObject);
@@ -282,11 +318,7 @@ namespace ScavShrapnelMod.Projectiles
             float decayFactor = decayT * decayT * (3f - 2f * decayT);
 
             // WHY: Disable collider before shard is fully invisible to prevent
-            // damage from nearly-invisible fragments. At decayFactor=0.15:
-            // scale ≈ 32%, alpha ≈ 24% — barely visible, no gameplay value
-            // in dealing damage. Prevents the invisible-damage window between
-            // "too small to see" and "early destroy threshold".
-            // PERF: Only checks once — _col.enabled becomes false permanently.
+            // damage from nearly-invisible fragments.
             if (decayFactor < 0.15f && _col != null && _col.enabled)
                 _col.enabled = false;
 
@@ -334,7 +366,6 @@ namespace ScavShrapnelMod.Projectiles
         {
             if (_outlineSr == null) return;
 
-            // Self-heal outline material if corrupted
             if (_outlineSr.sharedMaterial != null
                 && _outlineSr.sharedMaterial.shader == null)
                 _outlineSr.sharedMaterial = ShrapnelVisuals.UnlitMaterial;
@@ -400,29 +431,26 @@ namespace ScavShrapnelMod.Projectiles
         }
 
         //  COLLISION
-        //
-        //  BUG FIX: Previously, debris/stuck shards called BreakShard() for
-        //  ANY collision with velocity >5, including other shrapnel. This caused
-        //  chain destruction during explosions — 87 of 92 shards destroyed by
-        //  other shards flying through debris trigger/collision volumes.
-        //  Client mirrors vanished mid-flight because the server destroyed them
-        //  before the state debounce could send a REST transition.
-        //
-        //  NOW: Only break debris from high-velocity impacts with non-shrapnel
-        //  objects (terrain, entities). Other shrapnel fragments are filtered out.
 
         private void OnCollisionEnter2D(Collision2D collision)
         {
             if (state == State.Debris || state == State.Stuck)
             {
-                // WHY: Filter out shrapnel-on-shrapnel contacts to prevent chain
-                // destruction. Only non-shrapnel high-velocity impacts can break debris.
-                if (collision.relativeVelocity.magnitude > 5f
+                // WHY: Only server breaks debris from high-velocity non-shrapnel impacts.
+                // Client shards ignore all debris/stuck collisions.
+                if (IsServerAuthoritative
+                    && collision.relativeVelocity.magnitude > 5f
                     && !collision.collider.TryGetComponent<ShrapnelProjectile>(out _))
                     BreakShard();
                 return;
             }
             if (state != State.Flying) return;
+
+            // WHY: All damage, block breaking, and state transitions from collision
+            // are server-only. Client shards bounce via physics engine naturally —
+            // Unity handles the reflection, no code needed. Server MSG_STATE
+            // corrects final resting position.
+            if (!IsServerAuthoritative) return;
 
             if (collision.collider.TryGetComponent(out Limb limb))
             { HitLimb(limb); return; }
@@ -637,10 +665,6 @@ namespace ScavShrapnelMod.Projectiles
             return true;
         }
 
-        /// <summary>
-        /// Deterministic random roll [0, 1). Uses per-instance _rng seeded from
-        /// factory's deterministic Seed — identical results host↔client.
-        /// </summary>
         private float DeterministicRoll() => (float)_rng.NextDouble();
 
         //  SPARKS
@@ -909,25 +933,15 @@ namespace ScavShrapnelMod.Projectiles
             }
         }
 
-        //  TRIGGER (stepping on debris — players only)
-        //
-        //  BUG FIX: Previously called BreakShard() for ANY non-Body contact,
-        //  including other flying shrapnel. During explosions with 50+ shrapnel,
-        //  flying fragments pass through debris trigger volumes constantly,
-        //  causing chain destruction. From logs: 87 of 92 shards were destroyed
-        //  this way. Client mirrors vanished mid-flight because the server
-        //  destroyed them before any REST state transition could be sent.
-        //
-        //  NOW: Only reacts to Body (player/npc) contacts. Other shrapnel,
-        //  particles, and miscellaneous colliders are silently ignored.
+        //  TRIGGER (stepping on debris — server only)
 
         private void OnTriggerEnter2D(Collider2D other)
         {
             if (state != State.Debris && state != State.Stuck) return;
 
-            // WHY: return instead of BreakShard() for non-Body contacts.
-            // Previously: if (!TryGetComponent(out Body body)) { BreakShard(); return; }
-            // This destroyed debris when other shrapnel flew through it.
+            // WHY: Client shards don't deal step-on damage.
+            if (!IsServerAuthoritative) return;
+
             if (!other.TryGetComponent(out Body body)) return;
 
             if (state != State.Debris) return;
@@ -986,6 +1000,9 @@ namespace ScavShrapnelMod.Projectiles
 
         private void BreakShard()
         {
+            // WHY: Client shards don't break — server sends MSG_DESTROY.
+            if (!IsServerAuthoritative) return;
+
             try
             {
                 Sound.Play("glassshard", _transform.position,
@@ -993,6 +1010,98 @@ namespace ScavShrapnelMod.Projectiles
             }
             catch { }
             Destroy(gameObject);
+        }
+
+        //  PUBLIC API: NET SYNC
+
+        /// <summary>
+        /// Forces internal state machine to a specific state without going through
+        /// collision logic. Used by ShrapnelNetSync for client-side REST corrections.
+        ///
+        /// WHY: BecomeStuck requires a valid block position from WorldToBlockPos
+        /// which may fail during world loading. ForceToState sets the state directly
+        /// and handles Rigidbody/trail/heat cleanup identically.
+        /// </summary>
+        /// <param name="externalState">Target state.</param>
+        /// <param name="position">World position to snap to.</param>
+        public void ForceToState(ExternalState externalState, Vector2 position)
+        {
+            _transform.position = position;
+
+            switch (externalState)
+            {
+                case ExternalState.Stuck:
+                    state = State.Stuck;
+                    stuckTimer = 0f;
+                    _outlineApplied = false;
+                    _originalScale = _transform.localScale;
+
+                    if (rb != null && !rb.isKinematic
+                        && rb.bodyType != RigidbodyType2D.Static)
+                    {
+                        rb.velocity = Vector2.zero;
+                        rb.angularVelocity = 0f;
+                    }
+                    if (rb != null) rb.isKinematic = true;
+                    if (trail != null) trail.enabled = false;
+                    ClearHeatAndEmission();
+                    break;
+
+                case ExternalState.Debris:
+                    state = State.Debris;
+                    _outlineApplied = false;
+                    _originalScale = _transform.localScale;
+
+                    if (rb != null && !rb.isKinematic
+                        && rb.bodyType != RigidbodyType2D.Static)
+                    {
+                        rb.velocity = Vector2.zero;
+                        rb.angularVelocity = 0f;
+                    }
+                    if (rb != null) rb.isKinematic = true;
+                    if (trail != null) trail.enabled = false;
+                    if (_col != null) _col.isTrigger = true;
+                    ClearHeatAndEmission();
+
+                    debrisTimer = 0f;
+                    debrisLifetime = Type switch
+                    {
+                        ShrapnelType.Metal => ShrapnelConfig.DebrisLifetimeMetal.Value,
+                        ShrapnelType.HeavyMetal => ShrapnelConfig.DebrisLifetimeHeavyMetal.Value,
+                        ShrapnelType.Stone => ShrapnelConfig.DebrisLifetimeStone.Value,
+                        ShrapnelType.Wood => ShrapnelConfig.DebrisLifetimeWood.Value,
+                        ShrapnelType.Electronic => ShrapnelConfig.DebrisLifetimeElectronic.Value,
+                        _ => 300f,
+                    };
+                    break;
+
+                case ExternalState.Flying:
+                    state = State.Flying;
+                    _outlineApplied = false;
+                    lifeTimer = 0f;
+                    _originalScale = _transform.localScale;
+                    if (rb != null) rb.isKinematic = false;
+                    if (_col != null) _col.isTrigger = false;
+                    DestroyOutline();
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// Begins graceful 150ms shrink+fade for a client flying shard.
+        /// Called by ShrapnelNetSync when MSG_DESTROY arrives for a shard
+        /// still in flight. At-rest/debris shards are destroyed instantly.
+        /// </summary>
+        public void BeginClientFadeOut()
+        {
+            if (_clientFading) return;
+
+            _clientFading = true;
+            _clientFadeTimer = 0f;
+            _clientFadeScale = _transform.localScale;
+
+            if (trail != null && trail.enabled)
+                trail.enabled = false;
         }
 
         //  HEAT SYSTEM

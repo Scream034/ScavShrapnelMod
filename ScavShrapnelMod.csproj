@@ -82,7 +82,6 @@
     <Compile Include="Logic\BulletShrapnelLogic.cs" />
 
     <!-- Net -->
-    <Compile Include="Net\ClientMirrorShrapnel.cs" />
     <Compile Include="Net\ShrapnelNetSync.cs" />
 
     <!-- Helpers -->

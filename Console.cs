@@ -118,7 +118,7 @@ namespace ScavShrapnelMod
                     else if (ArgsContain(args, "turret")) explosionType = "turret";
                     else if (ArgsContainAny(args, "gravbag", "grav")) explosionType = "gravbag";
 
-                    ExplosionParams param = new ExplosionParams { position = pos };
+                    ExplosionParams param = new() { position = pos };
                     switch (explosionType)
                     {
                         case "dynamite":

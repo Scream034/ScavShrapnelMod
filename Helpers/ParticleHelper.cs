@@ -64,27 +64,27 @@ namespace ScavShrapnelMod.Helpers
 
         /// <summary>Ground chunks: low gravity (0.3), moderate drag (0.4).</summary>
         public static AshPhysicsParams Chunk(Vector2 velocity, float lifetime, System.Random rng)
-            => new AshPhysicsParams(velocity, lifetime, 0.3f, 0.4f, 0.3f, 1.5f,
+            => new(velocity, lifetime, 0.3f, 0.4f, 0.3f, 1.5f,
                 new Vector2(rng.Range(-0.1f, 0.1f), 0f), 0f);
 
         /// <summary>Dust cloud: very low gravity (0.15), high drag (0.7), strong turbulence.</summary>
         public static AshPhysicsParams Dust(Vector2 velocity, float lifetime, System.Random rng)
-            => new AshPhysicsParams(velocity, lifetime, 0.15f, 0.7f, 0.9f, 2.0f,
+            => new(velocity, lifetime, 0.15f, 0.7f, 0.9f, 2.0f,
                 new Vector2(rng.Range(-0.15f, 0.15f), 0f), 0.1f);
 
         /// <summary>Fast streaks: higher gravity (0.8), minimal drag (0.2), little turbulence.</summary>
         public static AshPhysicsParams Streak(Vector2 velocity, float lifetime)
-            => new AshPhysicsParams(velocity, lifetime, 0.8f, 0.2f, 0.15f, 1.0f,
+            => new(velocity, lifetime, 0.8f, 0.2f, 0.15f, 1.0f,
                 Vector2.zero, 0f);
 
         /// <summary>Desert dust: ultra-low gravity (0.08), long-lived, windy drift.</summary>
         public static AshPhysicsParams DesertDust(Vector2 velocity, float lifetime, System.Random rng)
-            => new AshPhysicsParams(velocity, lifetime, 0.08f, 0.6f, 0.8f, 1.5f,
+            => new(velocity, lifetime, 0.08f, 0.6f, 0.8f, 1.5f,
                 new Vector2(rng.Range(-0.3f, 0.3f), 0f), 0.3f);
 
         /// <summary>Cold steam: rises (-0.15 gravity), high turbulence, slight vertical wind.</summary>
         public static AshPhysicsParams ColdSteam(Vector2 velocity, float lifetime, System.Random rng)
-            => new AshPhysicsParams(velocity, lifetime, -0.15f, 0.5f, 1.0f, 2.5f,
+            => new(velocity, lifetime, -0.15f, 0.5f, 1.0f, 2.5f,
                 new Vector2(rng.Range(-0.2f, 0.2f), 0.1f), 0.5f);
 
         /// <summary>Standard ash: auto-derives drag/turbulence from gravity magnitude.</summary>
@@ -101,13 +101,13 @@ namespace ScavShrapnelMod.Helpers
         /// <summary>Smoke: configurable rising behavior.</summary>
         public static AshPhysicsParams Smoke(Vector2 velocity, float lifetime,
             float gravity, float drag, float turbulence, Vector2 wind, float thermalLift)
-            => new AshPhysicsParams(velocity, lifetime, gravity, drag, turbulence, 2f,
+            => new(velocity, lifetime, gravity, drag, turbulence, 2f,
                 wind, thermalLift);
 
         /// <summary>Embers: configurable glowing debris.</summary>
         public static AshPhysicsParams Ember(Vector2 velocity, float lifetime,
             float gravity, float drag, float turbulence, Vector2 wind, float thermalLift)
-            => new AshPhysicsParams(velocity, lifetime, gravity, drag, turbulence, 1f,
+            => new(velocity, lifetime, gravity, drag, turbulence, 1f,
                 wind, thermalLift);
     }
 

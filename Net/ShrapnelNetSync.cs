@@ -14,9 +14,22 @@ namespace ScavShrapnelMod.Net
     /// Server tracks real ShrapnelProjectile instances and broadcasts position data.
     /// Clients create lightweight visual mirrors (ClientMirrorShrapnel) with interpolation.
     ///
-    /// All NGO types (NetworkManager, FastBufferWriter/Reader, CustomMessagingManager,
-    /// NetworkDelivery) accessed via reflection — no compile-time dependency on Unity.Netcode.
-    /// This allows the mod to compile and run without the MP mod installed.
+    /// PROTOCOL (v3 — batched spawns + state debounce):
+    ///   MSG_SPAWN:    Reliable, batched — 2 + 15*N bytes
+    ///   MSG_SNAPSHOT: Unreliable, chunked — position updates for FLYING shards only
+    ///   MSG_DESTROY:  Reliable, batched — 2 + 2*N bytes
+    ///   MSG_STATE:    Reliable, batched — state transitions with 150ms hysteresis
+    ///
+    /// PERF vs v2:
+    ///   - Spawns batched: 46 individual packets → 1 packet per frame
+    ///   - Destroys batched: individual → batched per tick
+    ///   - State transitions debounced: 150ms hysteresis prevents REST↔FLY spam
+    ///   - Cached Rigidbody2D/Transform: eliminates GetComponent in hot paths
+    ///   - Pre-allocated constructor args: eliminates per-call object[] allocation
+    ///   - Per-type write arg arrays: reduces boxing isolation
+    ///   - Reflection calls reduced ~90% during explosion bursts
+    ///
+    /// All NGO types accessed via reflection — no compile-time dependency on Unity.Netcode.
     /// </summary>
     public sealed class ShrapnelNetSync : MonoBehaviour
     {
@@ -29,7 +42,7 @@ namespace ScavShrapnelMod.Net
         public const float InterpolationSpeed = 15f;
 
         /// <summary>Seconds without snapshot update before client destroys a mirror.</summary>
-        public const float MirrorTimeout = 2f;
+        public const float MirrorTimeout = 3f;
 
         /// <summary>Maximum tracked shrapnel count (leak protection).</summary>
         public const int MaxShrapnel = 1000;
@@ -37,38 +50,182 @@ namespace ScavShrapnelMod.Net
         /// <summary>Maximum plausible velocity magnitude for clamping extrapolation.</summary>
         public const float MaxExtrapolationSpeed = 150f;
 
+        /// <summary>
+        /// Max entries per snapshot packet to stay under UDP MTU (~1300 bytes).
+        /// 2 (header) + 6 * 200 = 1202 bytes — safe margin for all transports.
+        /// PERF: Splitting prevents "Writing past the end of the buffer" when
+        /// tracked count exceeds ~216 which overflows a single UDP packet.
+        /// </summary>
+        private const int MaxEntriesPerSnapshotPacket = 200;
+
+        /// <summary>
+        /// Extra bytes added to FastBufferWriter allocation for NGO internal overhead.
+        /// Prevents edge-case buffer overflows from alignment or framing bytes.
+        /// </summary>
+        private const int BufferHeadroom = 32;
+
+        /// <summary>
+        /// Max state transitions per batch message.
+        /// Limits MSG_STATE packet size: 2 + 9*100 = 902 bytes.
+        /// </summary>
+        private const int MaxStateTransitionsPerPacket = 100;
+
+        /// <summary>
+        /// Max spawns per batch message.
+        /// 2 + 17*70 = 1192 bytes — fits in single UDP packet.
+        /// WHY: Was 80 at 15 bytes/entry. Now 70 at 17 bytes/entry (added RotZ).
+        /// </summary>
+        private const int MaxSpawnsPerPacket = 70;
+
+        /// <summary>
+        /// Max destroys per batch message.
+        /// 2 + 2*200 = 402 bytes.
+        /// </summary>
+        private const int MaxDestroysPerPacket = 200;
+
+        /// <summary>
+        /// Minimum time a shard must remain at-rest before sending REST state.
+        /// Prevents REST→FLY→REST spam when shards bounce on surfaces.
+        /// PERF: Logs showed shards transitioning 3-5 times in 2 seconds,
+        /// each generating a reliable network message. Debounce eliminates this.
+        /// </summary>
+        private const float StateDebounceTime = 0.15f;
+
         //  MESSAGE NAMES (prefixed "Shr" to avoid collisions)
 
         private const string MSG_SPAWN = "ShrShrapnelSpawn";
         private const string MSG_SNAPSHOT = "ShrShrapnelSnapshot";
         private const string MSG_DESTROY = "ShrShrapnelDestroy";
+        private const string MSG_STATE = "ShrShrapnelState";
 
         //  SINGLETON
 
         private static ShrapnelNetSync _instance;
 
-        //  SERVER STATE
+        //  SERVER STATE — cached tracking data
 
-        private readonly Dictionary<ushort, ShrapnelProjectile> _tracked =
-            new Dictionary<ushort, ShrapnelProjectile>(256);
+        /// <summary>
+        /// Cached data for tracked projectiles. Stores component references
+        /// to avoid GetComponent calls in hot paths (10Hz snapshot tick).
+        /// PERF: Previously IsProjectileAtRest() called GetComponent<Rigidbody2D>()
+        /// for every tracked shard every tick. Now cached at registration.
+        /// </summary>
+        private readonly struct TrackedShard
+        {
+            public readonly ShrapnelProjectile Proj;
+            public readonly Rigidbody2D Rb;
+            public readonly Transform Transform;
+
+            public TrackedShard(ShrapnelProjectile proj)
+            {
+                Proj = proj;
+                Rb = proj.GetComponent<Rigidbody2D>();
+                Transform = proj.transform;
+            }
+
+            public bool IsNull => Proj == null;
+            public bool IsAtRest => Rb == null || Rb.isKinematic;
+        }
+
+        private readonly Dictionary<ushort, TrackedShard> _tracked =
+            new(256);
+
+        /// <summary>
+        /// Tracks which shards the server has reported as "at rest" to clients.
+        /// When a shard's isKinematic transitions, we detect the mismatch and
+        /// queue a MSG_STATE after the debounce period. Zero-GC after warmup.
+        /// </summary>
+        private readonly HashSet<ushort> _serverAtRest = new();
+
+        /// <summary>
+        /// Tracks when each shard's state change was first detected, for debounce.
+        /// Key = netId, Value = Time.time when the mismatch was first observed.
+        /// Removed once the state transition is confirmed and sent.
+        /// </summary>
+        private readonly Dictionary<ushort, float> _stateChangeTime =
+            new(64);
 
         private ushort _nextId = 1;
         private float _snapshotTimer;
 
         /// <summary>Reusable list for dead-entry cleanup (zero-GC).</summary>
-        private readonly List<ushort> _deadIds = new List<ushort>(64);
+        private readonly List<ushort> _deadIds = new(64);
 
-        /// <summary>Reusable list for snapshot iteration (zero-GC).</summary>
-        private readonly List<KeyValuePair<ushort, ShrapnelProjectile>> _snapshotCache =
-            new List<KeyValuePair<ushort, ShrapnelProjectile>>(256);
+        /// <summary>Reusable list for snapshot iteration — flying shards only.</summary>
+        private readonly List<KeyValuePair<ushort, TrackedShard>> _snapshotCache =
+            new(256);
+
+        /// <summary>Reusable list for state transition batch (zero-GC).</summary>
+        private readonly List<StateTransition> _pendingStateChanges =
+            new(64);
+
+        /// <summary>Queued spawn data for batched sending at end of tick.</summary>
+        private readonly List<SpawnData> _pendingSpawns = new(64);
+
+        /// <summary>Queued destroy IDs for batched sending.</summary>
+        private readonly List<ushort> _pendingDestroys = new(32);
+
+        /// <summary>Compact state transition record for batching.</summary>
+        private readonly struct StateTransition
+        {
+            public readonly ushort NetId;
+            public readonly bool AtRest;
+            public readonly short PosX;
+            public readonly short PosY;
+            /// <summary>Z rotation in degrees × 100. Only meaningful when AtRest=true.</summary>
+            public readonly short RotZ;
+
+            public StateTransition(ushort netId, bool atRest, Vector2 pos, float rotationZ)
+            {
+                NetId = netId;
+                AtRest = atRest;
+                PosX = (short)(pos.x * 10f);
+                PosY = (short)(pos.y * 10f);
+                // WHY: ×100 gives 0.01° precision, short range ±327° covers full circle
+                RotZ = (short)Mathf.Clamp(rotationZ * 100f, short.MinValue, short.MaxValue);
+            }
+        }
+
+        /// <summary>
+        /// Pre-packed spawn data to avoid re-reading components at send time.
+        /// PERF: All data packed once at registration, reused across all send attempts.
+        /// </summary>
+        private readonly struct SpawnData
+        {
+            public readonly ushort NetId;
+            public readonly short PosX, PosY;
+            public readonly byte TypePacked;
+            public readonly byte HeatPacked;
+            public readonly byte ShapeIndex;
+            public readonly ushort ScalePacked;
+            public readonly short VelX, VelY;
+            /// <summary>Z rotation in degrees × 100. Provides 0.01° precision for at-rest shards.</summary>
+            public readonly short RotZ;
+
+            public SpawnData(ushort netId, short posX, short posY,
+                byte typePacked, byte heatPacked, byte shapeIndex,
+                ushort scalePacked, short velX, short velY, short rotZ)
+            {
+                NetId = netId;
+                PosX = posX;
+                PosY = posY;
+                TypePacked = typePacked;
+                HeatPacked = heatPacked;
+                ShapeIndex = shapeIndex;
+                ScalePacked = scalePacked;
+                VelX = velX;
+                VelY = velY;
+                RotZ = rotZ;
+            }
+        }
 
         //  CLIENT STATE
 
         private readonly Dictionary<ushort, ClientMirrorShrapnel> _mirrors =
-            new Dictionary<ushort, ClientMirrorShrapnel>(256);
+            new(256);
 
         /// <summary>Reusable list for stale mirror cleanup (zero-GC).</summary>
-        private readonly List<ushort> _staleMirrorIds = new List<ushort>(32);
+        private readonly List<ushort> _staleMirrorIds = new(32);
 
         private bool _handlersRegistered;
 
@@ -85,78 +242,64 @@ namespace ScavShrapnelMod.Net
         private bool _ngoResolved;
         private bool _ngoAvailable;
 
-        // NetworkManager
         private Type _networkManagerType;
         private PropertyInfo _nmSingletonProp;
         private PropertyInfo _nmCustomMessagingProp;
-
-        // CustomMessagingManager type
         private Type _cmmType;
-
-        // SendNamedMessage(string, IReadOnlyList<ulong>, FastBufferWriter, NetworkDelivery)
         private MethodInfo _sendNamedMessageMethod;
-
-        // RegisterNamedMessageHandler(string, HandleNamedMessageDelegate)
         private MethodInfo _registerHandlerMethod;
-
-        // UnregisterNamedMessageHandler(string)
         private MethodInfo _unregisterHandlerMethod;
-
-        // HandleNamedMessageDelegate type
         private Type _handleNamedMessageDelegateType;
-
-        // FastBufferWriter
         private Type _fastBufferWriterType;
         private ConstructorInfo _fbwCtor;
         private MethodInfo _fbwDispose;
         private MethodInfo _fbwWriteUshort;
         private MethodInfo _fbwWriteShort;
         private MethodInfo _fbwWriteByte;
-
-        // FastBufferReader
         private Type _fastBufferReaderType;
         private MethodInfo _fbrReadUshort;
         private MethodInfo _fbrReadShort;
         private MethodInfo _fbrReadByte;
-
-        // NetworkDelivery enum values (boxed)
         private object _deliveryReliable;
         private object _deliveryUnreliable;
         private object _deliveryReliableSequenced;
-
-        // Allocator.Temp (boxed)
         private object _allocatorTemp;
-
-        // ForPrimitives default instance (boxed)
         private object _forPrimitivesDefault;
+
+        //  PRE-ALLOCATED ARGS FOR REFLECTION (zero-GC writes)
+
+        // PERF: Separate arg arrays per value type to isolate boxing.
+        // Each array holds [0]=value(boxed), [1]=ForPrimitives(default, set once).
+        // Previously shared _writeArgs2 re-assigned ForPrimitives every call.
+        private readonly object[] _writeArgsUshort = new object[2];
+        private readonly object[] _writeArgsShort = new object[2];
+        private readonly object[] _writeArgsByte = new object[2];
+        private readonly object[] _readArgs2 = new object[2];
+        private readonly object[] _sendArgs4 = new object[4];
+        private readonly object[] _regArgs2 = new object[2];
+        private readonly object[] _unregArgs1 = new object[1];
+
+        // PERF: Pre-allocated constructor args for CreateWriter — eliminates
+        // `new object[]` allocation per call. Was 46+ allocations per explosion.
+        private object[] _writerCtorArgs;
 
         //  DIAGNOSTICS COUNTERS
 
         private int _spawnsSent;
         private int _snapshotsSent;
         private int _destroysSent;
+        private int _statesSent;
         private int _spawnsReceived;
         private int _snapshotsReceived;
         private int _destroysReceived;
+        private int _statesReceived;
         private float _lastSnapshotReceiveTime;
-
-        //  REUSABLE ARG ARRAYS (zero-GC for reflection Invoke)
-
-        private readonly object[] _writeArgs2 = new object[2];
-        private readonly object[] _readArgs2 = new object[2];
-        private readonly object[] _sendArgs4 = new object[4];
-        private readonly object[] _regArgs2 = new object[2];
-        private readonly object[] _unregArgs1 = new object[1];
 
         //  STATIC HANDLER DISPATCH (for DynamicMethod delegates)
 
         private static readonly List<Action<ulong, object>> _handlerSlots =
-            new List<Action<ulong, object>>(4);
+            new(4);
 
-        /// <summary>
-        /// Static dispatch target called by DynamicMethod delegates.
-        /// Matches signature used in IL emit: (int index, ulong senderId, object boxedReader).
-        /// </summary>
         // ReSharper disable once UnusedMember.Local — called via IL emit
         private static void DispatchHandler(int index, ulong senderId, object reader)
         {
@@ -166,11 +309,6 @@ namespace ScavShrapnelMod.Net
 
         //  LIFECYCLE
 
-        /// <summary>
-        /// Creates the ShrapnelNetSync singleton. Call only when
-        /// MultiplayerHelper.IsNetworkRunning is true.
-        /// Safe to call multiple times — subsequent calls are no-ops.
-        /// </summary>
         public static void Initialize()
         {
             if (_instance != null) return;
@@ -188,10 +326,6 @@ namespace ScavShrapnelMod.Net
                 $" Client={MultiplayerHelper.IsClient})");
         }
 
-        /// <summary>
-        /// Destroys the singleton and cleans up all state.
-        /// Safe to call when _instance is null.
-        /// </summary>
         public static void Shutdown()
         {
             if (_instance == null) return;
@@ -201,6 +335,10 @@ namespace ScavShrapnelMod.Net
                 _instance.UnregisterHandlers();
                 _instance.DestroyAllMirrors();
                 _instance._tracked.Clear();
+                _instance._serverAtRest.Clear();
+                _instance._stateChangeTime.Clear();
+                _instance._pendingSpawns.Clear();
+                _instance._pendingDestroys.Clear();
             }
             catch (Exception e)
             {
@@ -247,7 +385,6 @@ namespace ScavShrapnelMod.Net
                     BindingFlags.Public | BindingFlags.NonPublic |
                     BindingFlags.Static | BindingFlags.Instance;
 
-                // ── Find Unity.Netcode.Runtime assembly ──
                 Assembly ngoAssembly = null;
                 foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
                 {
@@ -257,15 +394,10 @@ namespace ScavShrapnelMod.Net
                         break;
                     }
                 }
-                if (ngoAssembly == null)
-                {
-                    LogMissing("Unity.Netcode.Runtime assembly");
-                    return;
-                }
+                if (ngoAssembly == null) { LogMissing("Unity.Netcode.Runtime"); return; }
 
-                // ── NetworkManager ──
                 _networkManagerType = ngoAssembly.GetType("Unity.Netcode.NetworkManager");
-                if (_networkManagerType == null) { LogMissing("NetworkManager type"); return; }
+                if (_networkManagerType == null) { LogMissing("NetworkManager"); return; }
 
                 _nmSingletonProp = _networkManagerType.GetProperty("Singleton", allFlags);
                 if (_nmSingletonProp == null) { LogMissing("NetworkManager.Singleton"); return; }
@@ -274,11 +406,9 @@ namespace ScavShrapnelMod.Net
                     "CustomMessagingManager", allFlags);
                 if (_nmCustomMessagingProp == null) { LogMissing("CustomMessagingManager prop"); return; }
 
-                // ── CustomMessagingManager ──
                 _cmmType = ngoAssembly.GetType("Unity.Netcode.CustomMessagingManager");
                 if (_cmmType == null) { LogMissing("CustomMessagingManager type"); return; }
 
-                // ── HandleNamedMessageDelegate ──
                 _handleNamedMessageDelegateType = null;
                 foreach (var nested in _cmmType.GetNestedTypes(allFlags))
                 {
@@ -290,64 +420,55 @@ namespace ScavShrapnelMod.Net
                 }
                 if (_handleNamedMessageDelegateType == null)
                 {
-                    // Try non-nested
                     _handleNamedMessageDelegateType = ngoAssembly.GetType(
                         "Unity.Netcode.CustomMessagingManager+HandleNamedMessageDelegate");
                 }
-                if (_handleNamedMessageDelegateType == null)
-                {
-                    LogMissing("HandleNamedMessageDelegate");
-                    return;
-                }
+                if (_handleNamedMessageDelegateType == null) { LogMissing("HandleNamedMessageDelegate"); return; }
 
-                // ── FastBufferWriter ──
                 _fastBufferWriterType = ngoAssembly.GetType("Unity.Netcode.FastBufferWriter");
                 if (_fastBufferWriterType == null) { LogMissing("FastBufferWriter"); return; }
 
-                // ── FastBufferReader ──
                 _fastBufferReaderType = ngoAssembly.GetType("Unity.Netcode.FastBufferReader");
                 if (_fastBufferReaderType == null) { LogMissing("FastBufferReader"); return; }
 
-                // ── NetworkDelivery enum ──
                 var deliveryType = ngoAssembly.GetType("Unity.Netcode.NetworkDelivery");
                 if (deliveryType == null) { LogMissing("NetworkDelivery"); return; }
                 _deliveryReliable = Enum.Parse(deliveryType, "Reliable");
                 _deliveryUnreliable = Enum.Parse(deliveryType, "Unreliable");
                 _deliveryReliableSequenced = Enum.Parse(deliveryType, "ReliableSequenced");
 
-                // ── Allocator.Temp ──
                 var allocatorType = typeof(Unity.Collections.Allocator);
                 _allocatorTemp = Enum.Parse(allocatorType, "Temp");
 
-                // ── ForPrimitives default ──
                 var forPrimType = _fastBufferWriterType.GetNestedType("ForPrimitives", allFlags);
                 if (forPrimType != null)
                     _forPrimitivesDefault = Activator.CreateInstance(forPrimType);
 
-                // ── FastBufferWriter constructor ──
                 _fbwCtor = _fastBufferWriterType.GetConstructor(
-                    new[] { typeof(int), allocatorType, typeof(int) }) ?? _fastBufferWriterType.GetConstructor(
+                    new[] { typeof(int), allocatorType, typeof(int) })
+                    ?? _fastBufferWriterType.GetConstructor(
                         new[] { typeof(int), allocatorType });
                 if (_fbwCtor == null) { LogMissing("FastBufferWriter ctor"); return; }
 
-                // ── FastBufferWriter.Dispose ──
+                // PERF: Pre-allocate constructor args array once
+                var ctorParams = _fbwCtor.GetParameters();
+                _writerCtorArgs = ctorParams.Length == 3
+                    ? new object[] { 0, _allocatorTemp, -1 }
+                    : new object[] { 0, _allocatorTemp };
+
                 _fbwDispose = _fastBufferWriterType.GetMethod("Dispose", Type.EmptyTypes);
                 if (_fbwDispose == null) { LogMissing("FastBufferWriter.Dispose"); return; }
 
-                // ── WriteValueSafe<T>(in T, ForPrimitives) ──
                 ResolveWriteMethods(allFlags);
                 if (_fbwWriteUshort == null) { LogMissing("WriteValueSafe<ushort>"); return; }
                 if (_fbwWriteShort == null) { LogMissing("WriteValueSafe<short>"); return; }
                 if (_fbwWriteByte == null) { LogMissing("WriteValueSafe<byte>"); return; }
 
-                // ── ReadValueSafe<T>(out T, ForPrimitives) ──
                 ResolveReadMethods(allFlags);
                 if (_fbrReadUshort == null) { LogMissing("ReadValueSafe<ushort>"); return; }
                 if (_fbrReadShort == null) { LogMissing("ReadValueSafe<short>"); return; }
                 if (_fbrReadByte == null) { LogMissing("ReadValueSafe<byte>"); return; }
 
-                // ── SendNamedMessage ──
-                // void SendNamedMessage(string, IReadOnlyList<ulong>, FastBufferWriter, NetworkDelivery)
                 foreach (var m in _cmmType.GetMethods(allFlags))
                 {
                     if (m.Name != "SendNamedMessage") continue;
@@ -364,7 +485,6 @@ namespace ScavShrapnelMod.Net
                 }
                 if (_sendNamedMessageMethod == null) { LogMissing("SendNamedMessage"); return; }
 
-                // ── RegisterNamedMessageHandler ──
                 foreach (var m in _cmmType.GetMethods(allFlags))
                 {
                     if (m.Name != "RegisterNamedMessageHandler") continue;
@@ -377,9 +497,15 @@ namespace ScavShrapnelMod.Net
                 }
                 if (_registerHandlerMethod == null) { LogMissing("RegisterNamedMessageHandler"); return; }
 
-                // ── UnregisterNamedMessageHandler ──
                 _unregisterHandlerMethod = _cmmType.GetMethod(
                     "UnregisterNamedMessageHandler", new[] { typeof(string) });
+
+                // PERF: Initialize per-type write arg arrays with ForPrimitives default.
+                // Set once here instead of on every Write call.
+                _writeArgsUshort[1] = _forPrimitivesDefault;
+                _writeArgsShort[1] = _forPrimitivesDefault;
+                _writeArgsByte[1] = _forPrimitivesDefault;
+                _readArgs2[1] = _forPrimitivesDefault;
 
                 _ngoAvailable = true;
             }
@@ -392,7 +518,6 @@ namespace ScavShrapnelMod.Net
 
         private void ResolveWriteMethods(BindingFlags flags)
         {
-            // Looking for generic: WriteValueSafe<T>(in T value, ForPrimitives unused)
             foreach (var m in _fastBufferWriterType.GetMethods(flags))
             {
                 if (m.Name != "WriteValueSafe" || !m.IsGenericMethodDefinition) continue;
@@ -413,7 +538,6 @@ namespace ScavShrapnelMod.Net
 
         private void ResolveReadMethods(BindingFlags flags)
         {
-            // Looking for generic: ReadValueSafe<T>(out T value, ForPrimitives unused)
             foreach (var m in _fastBufferReaderType.GetMethods(flags))
             {
                 if (m.Name != "ReadValueSafe" || !m.IsGenericMethodDefinition) continue;
@@ -453,15 +577,14 @@ namespace ScavShrapnelMod.Net
             catch { return null; }
         }
 
-        /// <summary>Creates a boxed FastBufferWriter(size, Allocator.Temp).</summary>
+        /// <summary>Creates a boxed FastBufferWriter. Zero-alloc args via _writerCtorArgs.</summary>
         private object CreateWriter(int size)
         {
             try
             {
-                var ctorParams = _fbwCtor.GetParameters();
-                if (ctorParams.Length == 3)
-                    return _fbwCtor.Invoke(new object[] { size, _allocatorTemp, -1 });
-                return _fbwCtor.Invoke(new object[] { size, _allocatorTemp });
+                // PERF: Mutate pre-allocated args array instead of allocating new one
+                _writerCtorArgs[0] = size;
+                return _fbwCtor.Invoke(_writerCtorArgs);
             }
             catch (Exception e)
             {
@@ -477,31 +600,29 @@ namespace ScavShrapnelMod.Net
             catch { /* best effort */ }
         }
 
+        // PERF: Each Write method uses its own arg array to isolate boxing
+        // and avoid re-assigning ForPrimitives every call.
         private void WriteUshort(object writer, ushort value)
         {
-            _writeArgs2[0] = value;
-            _writeArgs2[1] = _forPrimitivesDefault;
-            _fbwWriteUshort.Invoke(writer, _writeArgs2);
+            _writeArgsUshort[0] = value;
+            _fbwWriteUshort.Invoke(writer, _writeArgsUshort);
         }
 
         private void WriteShort(object writer, short value)
         {
-            _writeArgs2[0] = value;
-            _writeArgs2[1] = _forPrimitivesDefault;
-            _fbwWriteShort.Invoke(writer, _writeArgs2);
+            _writeArgsShort[0] = value;
+            _fbwWriteShort.Invoke(writer, _writeArgsShort);
         }
 
         private void WriteByte(object writer, byte value)
         {
-            _writeArgs2[0] = value;
-            _writeArgs2[1] = _forPrimitivesDefault;
-            _fbwWriteByte.Invoke(writer, _writeArgs2);
+            _writeArgsByte[0] = value;
+            _fbwWriteByte.Invoke(writer, _writeArgsByte);
         }
 
         private ushort ReadUshort(object reader)
         {
             _readArgs2[0] = (ushort)0;
-            _readArgs2[1] = _forPrimitivesDefault;
             _fbrReadUshort.Invoke(reader, _readArgs2);
             return (ushort)_readArgs2[0];
         }
@@ -509,7 +630,6 @@ namespace ScavShrapnelMod.Net
         private short ReadShort(object reader)
         {
             _readArgs2[0] = (short)0;
-            _readArgs2[1] = _forPrimitivesDefault;
             _fbrReadShort.Invoke(reader, _readArgs2);
             return (short)_readArgs2[0];
         }
@@ -517,7 +637,6 @@ namespace ScavShrapnelMod.Net
         private byte ReadByte(object reader)
         {
             _readArgs2[0] = (byte)0;
-            _readArgs2[1] = _forPrimitivesDefault;
             _fbrReadByte.Invoke(reader, _readArgs2);
             return (byte)_readArgs2[0];
         }
@@ -534,11 +653,6 @@ namespace ScavShrapnelMod.Net
 
         //  SERVER PUBLIC API
 
-        /// <summary>
-        /// Registers a newly spawned ShrapnelProjectile for network sync.
-        /// Assigns NetSyncId and sends spawn message to all clients.
-        /// No-op in singleplayer, on client, or when instance is null.
-        /// </summary>
         public static void ServerRegister(ShrapnelProjectile proj)
         {
             if (_instance == null || !MultiplayerHelper.IsServer) return;
@@ -546,10 +660,6 @@ namespace ScavShrapnelMod.Net
             _instance.ServerRegisterInternal(proj);
         }
 
-        /// <summary>
-        /// Unregisters a destroyed ShrapnelProjectile and notifies clients.
-        /// No-op in singleplayer, on client, or if netId is 0.
-        /// </summary>
         public static void ServerUnregister(ushort netId)
         {
             if (_instance == null || !MultiplayerHelper.IsServer) return;
@@ -559,85 +669,54 @@ namespace ScavShrapnelMod.Net
 
         private void ServerRegisterInternal(ShrapnelProjectile proj)
         {
-            if (_tracked.Count >= MaxShrapnel)
-                return; // leak protection
+            if (_tracked.Count >= MaxShrapnel) return;
 
             ushort id = _nextId++;
-            if (_nextId == 0) _nextId = 1; // wraparound, skip 0
+            if (_nextId == 0) _nextId = 1;
 
             proj.NetSyncId = id;
-            _tracked[id] = proj;
-            SendSpawn(proj, id);
+            var shard = new TrackedShard(proj);
+            _tracked[id] = shard;
+
+            if (shard.IsAtRest)
+                _serverAtRest.Add(id);
+
+            // PERF: Queue spawn data instead of sending immediately.
+            // Previously each of 46 spawns sent an individual reliable message.
+            // Now all spawns in a frame are batched into 1 packet.
+            QueueSpawnData(proj, shard, id);
+
+#if DEBUG
+            Vector2 vel = (shard.Rb != null && !shard.Rb.isKinematic)
+                ? shard.Rb.velocity : Vector2.zero;
+            Plugin.Log.LogInfo(
+                $"[NetSend:SPAWN] id={id} type={proj.Type} weight={proj.Weight}" +
+                $" heat={proj.Heat:F2} trail={proj.HasTrail}" +
+                $" atRest={shard.IsAtRest}" +
+                $" vel=({vel.x:F1},{vel.y:F1})");
+#endif
         }
 
-        private void ServerUnregisterInternal(ushort netId)
+        /// <summary>
+        /// Pre-packs spawn data into SpawnData struct at registration time.
+        /// PERF: Avoids reading components again at send time.
+        /// </summary>
+        private void QueueSpawnData(ShrapnelProjectile proj, TrackedShard shard, ushort netId)
         {
-            _tracked.Remove(netId);
-            SendDestroy(netId);
-        }
-
-        //  SERVER UPDATE
-
-        private void Update()
-        {
-            if (MultiplayerHelper.IsServer)
-                ServerUpdate();
-        }
-
-        private void ServerUpdate()
-        {
-            _snapshotTimer += Time.deltaTime;
-            if (_snapshotTimer < 1f / SnapshotHz) return;
-            _snapshotTimer = 0f;
-
-            // Purge dead entries (destroyed without OnDestroy, or null ref)
-            _deadIds.Clear();
-            foreach (var kvp in _tracked)
-            {
-                if (kvp.Value == null)
-                    _deadIds.Add(kvp.Key);
-            }
-            for (int i = 0; i < _deadIds.Count; i++)
-            {
-                ushort deadId = _deadIds[i];
-                _tracked.Remove(deadId);
-                SendDestroy(deadId);
-            }
-
-            if (_tracked.Count > 0)
-                SendSnapshot();
-        }
-
-        //  SERVER → CLIENT: SPAWN (Reliable, 11 bytes)
-        //  Packet layout:
-        //    netId(2) + posX(2) + posY(2) + typePacked(1) + heat(1) + shape(1) + scale(2) = 11
-        //  typePacked bit layout:
-        //    bits 0-2: ShrapnelType (0-4)
-        //    bits 3-5: ShrapnelWeight (0-4)
-        //    bit 6:    HasTrail
-        //    bit 7:    reserved
-
-        private void SendSpawn(ShrapnelProjectile proj, ushort netId)
-        {
-            var clientIds = GetClientIds();
-            if (clientIds == null || clientIds.Count == 0) return;
-
-            var cmm = GetCustomMessagingManager();
-            if (cmm == null) return;
-
-            Vector2 pos = proj.transform.position;
+            Vector2 pos = shard.Transform.position;
             short posX = (short)(pos.x * 10f);
             short posY = (short)(pos.y * 10f);
 
-            // WHY: Pack type(3 bits) + weight(3 bits) + hasTrail(1 bit) into single byte
+            bool atRest = shard.IsAtRest;
+
             byte typePacked = (byte)(
                 (int)proj.Type |
                 ((int)proj.Weight << 3) |
-                (proj.HasTrail ? (1 << 6) : 0));
+                (proj.HasTrail ? (1 << 6) : 0) |
+                (atRest ? (1 << 7) : 0));
 
             byte heatPacked = (byte)(Mathf.Clamp01(proj.Heat) * 255f);
 
-            // Determine shape by matching sprite
             byte shapeIndex = 0;
             var sr = proj.GetComponent<SpriteRenderer>();
             if (sr != null && sr.sprite != null)
@@ -653,30 +732,195 @@ namespace ScavShrapnelMod.Net
                 }
             }
 
-            float scale = proj.transform.localScale.x;
+            float scale = shard.Transform.localScale.x;
             ushort scalePacked = (ushort)(Mathf.Clamp(scale, 0f, 65.535f) * 1000f);
 
-            // netId(2) + posX(2) + posY(2) + type(1) + heat(1) + shape(1) + scale(2) = 11
-            const int size = 11;
-            object writer = CreateWriter(size);
+            Vector2 vel = Vector2.zero;
+            if (!atRest && shard.Rb != null && !shard.Rb.isKinematic)
+                vel = shard.Rb.velocity;
+
+            short velX = (short)Mathf.Clamp(vel.x * 10f, short.MinValue, short.MaxValue);
+            short velY = (short)Mathf.Clamp(vel.y * 10f, short.MinValue, short.MaxValue);
+
+            // WHY: Capture rotation for ALL shards, not just at-rest.
+            // Flying shards derive rotation from velocity on client, but initial
+            // rotation matters for the first frame before velocity correction kicks in.
+            // At-rest shards need exact rotation since they never update it.
+            float rotZ = shard.Transform.rotation.eulerAngles.z;
+            short rotZPacked = (short)Mathf.Clamp(rotZ * 100f, short.MinValue, short.MaxValue);
+
+            _pendingSpawns.Add(new SpawnData(
+                netId, posX, posY, typePacked, heatPacked,
+                shapeIndex, scalePacked, velX, velY, rotZPacked));
+        }
+
+        private void ServerUnregisterInternal(ushort netId)
+        {
+            _tracked.Remove(netId);
+            _serverAtRest.Remove(netId);
+            _stateChangeTime.Remove(netId);
+            _pendingDestroys.Add(netId);
+        }
+
+        //  SERVER UPDATE
+
+        private void Update()
+        {
+            if (MultiplayerHelper.IsServer)
+                ServerUpdate();
+        }
+
+        private void ServerUpdate()
+        {
+            float now = Time.time;
+
+            // Flush pending spawns and destroys every frame to minimize latency
+            if (_pendingSpawns.Count > 0)
+                FlushSpawnBatch();
+
+            if (_pendingDestroys.Count > 0)
+                FlushDestroyBatch();
+
+            _snapshotTimer += Time.deltaTime;
+            if (_snapshotTimer < 1f / SnapshotHz) return;
+            _snapshotTimer = 0f;
+
+            // Phase 1: Purge dead entries
+            _deadIds.Clear();
+            foreach (var kvp in _tracked)
+            {
+                if (kvp.Value.IsNull)
+                    _deadIds.Add(kvp.Key);
+            }
+            for (int i = 0; i < _deadIds.Count; i++)
+            {
+                ushort deadId = _deadIds[i];
+                _tracked.Remove(deadId);
+                _serverAtRest.Remove(deadId);
+                _stateChangeTime.Remove(deadId);
+                _pendingDestroys.Add(deadId);
+            }
+
+            if (_pendingDestroys.Count > 0)
+                FlushDestroyBatch();
+
+            // Phase 2: Detect state transitions with debounce + build flying snapshot cache
+            _pendingStateChanges.Clear();
+            _snapshotCache.Clear();
+
+            foreach (var kvp in _tracked)
+            {
+                if (kvp.Value.IsNull) continue;
+
+                bool currentlyAtRest = kvp.Value.IsAtRest;
+                bool wasAtRest = _serverAtRest.Contains(kvp.Key);
+
+                if (currentlyAtRest != wasAtRest)
+                {
+                    // PERF: Debounce. Only send after StateDebounceTime elapsed.
+                    // Prevents REST→FLY→REST spam from bouncing shards.
+                    if (!_stateChangeTime.ContainsKey(kvp.Key))
+                    {
+                        _stateChangeTime[kvp.Key] = now;
+                    }
+                    else if (now - _stateChangeTime[kvp.Key] >= StateDebounceTime)
+                    {
+                        Vector2 pos = kvp.Value.Transform.position;
+                        float rotZ = kvp.Value.Transform.rotation.eulerAngles.z;
+                        _pendingStateChanges.Add(
+                            new StateTransition(kvp.Key, currentlyAtRest, pos, rotZ));
+
+                        if (currentlyAtRest)
+                            _serverAtRest.Add(kvp.Key);
+                        else
+                            _serverAtRest.Remove(kvp.Key);
+
+                        _stateChangeTime.Remove(kvp.Key);
+                    }
+                }
+                else
+                {
+                    // State matches — clear any pending debounce (state reverted naturally)
+                    _stateChangeTime.Remove(kvp.Key);
+                }
+
+                if (!currentlyAtRest)
+                    _snapshotCache.Add(kvp);
+            }
+
+            if (_pendingStateChanges.Count > 0)
+                SendStateBatch();
+
+            if (_snapshotCache.Count > 0)
+                SendSnapshot();
+        }
+
+        //  SERVER → CLIENT: BATCHED SPAWN (Reliable)
+        //  Packet: 2 + 15*N bytes per chunk, max 80 entries
+
+        private void FlushSpawnBatch()
+        {
+            var clientIds = GetClientIds();
+            if (clientIds == null || clientIds.Count == 0)
+            {
+                _pendingSpawns.Clear();
+                return;
+            }
+
+            var cmm = GetCustomMessagingManager();
+            if (cmm == null)
+            {
+                _pendingSpawns.Clear();
+                return;
+            }
+
+            int total = _pendingSpawns.Count;
+            int offset = 0;
+
+            while (offset < total)
+            {
+                int chunkCount = Mathf.Min(total - offset, MaxSpawnsPerPacket);
+                SendSpawnChunk(cmm, clientIds, offset, chunkCount);
+                offset += chunkCount;
+            }
+
+            _spawnsSent += total;
+            _pendingSpawns.Clear();
+        }
+
+        private void SendSpawnChunk(object cmm, IReadOnlyList<ulong> clientIds,
+      int offset, int count)
+        {
+            ushort countU = (ushort)count;
+            // WHY: 17 bytes per entry (was 15) — added 2 bytes for RotZ
+            int size = 2 + 17 * count;
+            object writer = CreateWriter(size + BufferHeadroom);
             if (writer == null) return;
 
             try
             {
-                WriteUshort(writer, netId);
-                WriteShort(writer, posX);
-                WriteShort(writer, posY);
-                WriteByte(writer, typePacked);
-                WriteByte(writer, heatPacked);
-                WriteByte(writer, shapeIndex);
-                WriteUshort(writer, scalePacked);
+                WriteUshort(writer, countU);
+
+                for (int i = 0; i < count; i++)
+                {
+                    var sd = _pendingSpawns[offset + i];
+                    WriteUshort(writer, sd.NetId);
+                    WriteShort(writer, sd.PosX);
+                    WriteShort(writer, sd.PosY);
+                    WriteByte(writer, sd.TypePacked);
+                    WriteByte(writer, sd.HeatPacked);
+                    WriteByte(writer, sd.ShapeIndex);
+                    WriteUshort(writer, sd.ScalePacked);
+                    WriteShort(writer, sd.VelX);
+                    WriteShort(writer, sd.VelY);
+                    WriteShort(writer, sd.RotZ);
+                }
 
                 SendMessage(cmm, MSG_SPAWN, clientIds, writer, _deliveryReliable);
-                _spawnsSent++;
             }
             catch (Exception e)
             {
-                Plugin.Log.LogError($"[ShrapnelNetSync] SendSpawn failed: {e.Message}");
+                Plugin.Log.LogError($"[ShrapnelNetSync] SendSpawnBatch failed: {e.Message}");
             }
             finally
             {
@@ -684,7 +928,9 @@ namespace ScavShrapnelMod.Net
             }
         }
 
-        //  SERVER = CLIENT: SNAPSHOT (Unreliable, 2 + 6*N bytes)
+        //  SERVER → CLIENT: SNAPSHOT (Unreliable, chunked)
+        //  Only FLYING shards — grounded shards excluded.
+        //  Packet: 2 + 6*N bytes per chunk, max 200 entries.
 
         private void SendSnapshot()
         {
@@ -694,20 +940,24 @@ namespace ScavShrapnelMod.Net
             var cmm = GetCustomMessagingManager();
             if (cmm == null) return;
 
-            // Build cache to avoid Dictionary enumerator allocation during write
-            _snapshotCache.Clear();
-            foreach (var kvp in _tracked)
+            int totalCount = _snapshotCache.Count;
+            if (totalCount == 0) return;
+
+            int offset = 0;
+            while (offset < totalCount)
             {
-                if (kvp.Value != null)
-                    _snapshotCache.Add(kvp);
+                int chunkCount = Mathf.Min(totalCount - offset, MaxEntriesPerSnapshotPacket);
+                SendSnapshotChunk(cmm, clientIds, offset, chunkCount);
+                offset += chunkCount;
             }
+        }
 
-            int count = _snapshotCache.Count;
-            if (count == 0) return;
-
-            ushort countU = (ushort)Mathf.Min(count, ushort.MaxValue);
+        private void SendSnapshotChunk(object cmm, IReadOnlyList<ulong> clientIds,
+            int offset, int count)
+        {
+            ushort countU = (ushort)count;
             int size = 2 + 6 * countU;
-            object writer = CreateWriter(size);
+            object writer = CreateWriter(size + BufferHeadroom);
             if (writer == null) return;
 
             try
@@ -716,13 +966,13 @@ namespace ScavShrapnelMod.Net
 
                 for (int i = 0; i < countU; i++)
                 {
-                    var kvp = _snapshotCache[i];
-                    ushort nid = kvp.Key;
-                    Vector2 pos = kvp.Value.transform.position;
+                    var kvp = _snapshotCache[offset + i];
+                    // PERF: Use cached Transform instead of kvp.Value.Proj.transform
+                    Vector2 pos = kvp.Value.Transform.position;
                     short px = (short)(pos.x * 10f);
                     short py = (short)(pos.y * 10f);
 
-                    WriteUshort(writer, nid);
+                    WriteUshort(writer, kvp.Key);
                     WriteShort(writer, px);
                     WriteShort(writer, py);
                 }
@@ -740,9 +990,11 @@ namespace ScavShrapnelMod.Net
             }
         }
 
-        //  SERVER = CLIENT: DESTROY (ReliableSequenced, 2 bytes)
+        //  SERVER → CLIENT: STATE TRANSITION (Reliable, batched)
+        //  Packet: 2 + 9*N bytes per chunk, max 100 entries
+        //    count(2) + N × (netId:2 + state:1 + posX:2 + posY:2 + rotZ:2)
 
-        private void SendDestroy(ushort netId)
+        private void SendStateBatch()
         {
             var clientIds = GetClientIds();
             if (clientIds == null || clientIds.Count == 0) return;
@@ -750,19 +1002,108 @@ namespace ScavShrapnelMod.Net
             var cmm = GetCustomMessagingManager();
             if (cmm == null) return;
 
-            const int size = 2;
-            object writer = CreateWriter(size);
+            int total = _pendingStateChanges.Count;
+            int offset = 0;
+
+            while (offset < total)
+            {
+                int chunkCount = Mathf.Min(total - offset, MaxStateTransitionsPerPacket);
+                SendStateChunk(cmm, clientIds, offset, chunkCount);
+                offset += chunkCount;
+            }
+        }
+
+        private void SendStateChunk(object cmm, IReadOnlyList<ulong> clientIds,
+      int offset, int count)
+        {
+            ushort countU = (ushort)count;
+            int size = 2 + 9 * countU;
+            object writer = CreateWriter(size + BufferHeadroom);
             if (writer == null) return;
 
             try
             {
-                WriteUshort(writer, netId);
-                SendMessage(cmm, MSG_DESTROY, clientIds, writer, _deliveryReliableSequenced);
-                _destroysSent++;
+                WriteUshort(writer, countU);
+
+                for (int i = 0; i < countU; i++)
+                {
+                    var st = _pendingStateChanges[offset + i];
+                    WriteUshort(writer, st.NetId);
+                    WriteByte(writer, (byte)(st.AtRest ? 1 : 0));
+                    WriteShort(writer, st.PosX);
+                    WriteShort(writer, st.PosY);
+                    WriteShort(writer, st.RotZ);
+                }
+
+                SendMessage(cmm, MSG_STATE, clientIds, writer, _deliveryReliable);
+                // WHY: Count individual transitions, not packets.
+                // Previously _statesSent++ counted packets while client counted
+                // individual transitions → logs showed 39 sent vs 154 received.
+                _statesSent += count;
             }
             catch (Exception e)
             {
-                Plugin.Log.LogError($"[ShrapnelNetSync] SendDestroy failed: {e.Message}");
+                Plugin.Log.LogError($"[ShrapnelNetSync] SendState failed: {e.Message}");
+            }
+            finally
+            {
+                DisposeWriter(writer);
+            }
+        }
+
+        //  SERVER → CLIENT: BATCHED DESTROY (ReliableSequenced)
+        //  Packet: 2 + 2*N bytes per chunk, max 200 entries
+
+        private void FlushDestroyBatch()
+        {
+            var clientIds = GetClientIds();
+            if (clientIds == null || clientIds.Count == 0)
+            {
+                _pendingDestroys.Clear();
+                return;
+            }
+
+            var cmm = GetCustomMessagingManager();
+            if (cmm == null)
+            {
+                _pendingDestroys.Clear();
+                return;
+            }
+
+            int total = _pendingDestroys.Count;
+            int offset = 0;
+
+            while (offset < total)
+            {
+                int chunkCount = Mathf.Min(total - offset, MaxDestroysPerPacket);
+                SendDestroyChunk(cmm, clientIds, offset, chunkCount);
+                offset += chunkCount;
+            }
+
+            _destroysSent += total;
+            _pendingDestroys.Clear();
+        }
+
+        private void SendDestroyChunk(object cmm, IReadOnlyList<ulong> clientIds,
+            int offset, int count)
+        {
+            ushort countU = (ushort)count;
+            int size = 2 + 2 * count;
+            object writer = CreateWriter(size + BufferHeadroom);
+            if (writer == null) return;
+
+            try
+            {
+                WriteUshort(writer, countU);
+
+                for (int i = 0; i < count; i++)
+                    WriteUshort(writer, _pendingDestroys[offset + i]);
+
+                SendMessage(cmm, MSG_DESTROY, clientIds, writer, _deliveryReliableSequenced);
+            }
+            catch (Exception e)
+            {
+                Plugin.Log.LogError($"[ShrapnelNetSync] SendDestroyBatch failed: {e.Message}");
             }
             finally
             {
@@ -771,13 +1112,6 @@ namespace ScavShrapnelMod.Net
         }
 
         //  CLIENT: HANDLER REGISTRATION
-        //
-        //  HandleNamedMessageDelegate has signature:
-        //    void(ulong senderId, FastBufferReader messagePayload)
-        //
-        //  FastBufferReader is a STRUCT we can't reference at compile time.
-        //  Solution: emit DynamicMethod that boxes the struct and forwards
-        //  to our static DispatchHandler(int, ulong, object).
 
         private void RegisterHandlers()
         {
@@ -798,6 +1132,8 @@ namespace ScavShrapnelMod.Net
                     new Action<ulong, object>(OnReceiveSnapshotRaw));
                 RegisterSingleHandler(cmm, MSG_DESTROY,
                     new Action<ulong, object>(OnReceiveDestroyRaw));
+                RegisterSingleHandler(cmm, MSG_STATE,
+                    new Action<ulong, object>(OnReceiveStateRaw));
 
                 _handlersRegistered = true;
             }
@@ -808,19 +1144,12 @@ namespace ScavShrapnelMod.Net
             }
         }
 
-        /// <summary>
-        /// Creates a DynamicMethod matching HandleNamedMessageDelegate(ulong, FastBufferReader)
-        /// that boxes the FastBufferReader struct and forwards to DispatchHandler(int, ulong, object).
-        /// This is necessary because we cannot reference FastBufferReader at compile time.
-        /// </summary>
         private void RegisterSingleHandler(object cmm, string msgName,
             Action<ulong, object> handler)
         {
             int slotIndex = _handlerSlots.Count;
             _handlerSlots.Add(handler);
 
-            // DynamicMethod signature matches HandleNamedMessageDelegate:
-            //   void(ulong senderId, FastBufferReader payload)
             var dm = new DynamicMethod(
                 "ShrNS_" + msgName,
                 typeof(void),
@@ -830,17 +1159,11 @@ namespace ScavShrapnelMod.Net
 
             ILGenerator il = dm.GetILGenerator();
 
-            // Push slotIndex (int constant)
             il.Emit(OpCodes.Ldc_I4, slotIndex);
-
-            // Push senderId (arg 0, ulong)
             il.Emit(OpCodes.Ldarg_0);
-
-            // Push reader (arg 1, FastBufferReader struct) and box to object
             il.Emit(OpCodes.Ldarg_1);
             il.Emit(OpCodes.Box, _fastBufferReaderType);
 
-            // Call static DispatchHandler(int, ulong, object)
             MethodInfo dispatchMI = typeof(ShrapnelNetSync).GetMethod(
                 nameof(DispatchHandler),
                 BindingFlags.NonPublic | BindingFlags.Static,
@@ -848,13 +1171,10 @@ namespace ScavShrapnelMod.Net
                 new[] { typeof(int), typeof(ulong), typeof(object) },
                 null);
             il.Emit(OpCodes.Call, dispatchMI);
-
             il.Emit(OpCodes.Ret);
 
-            // Create delegate of the correct type
             Delegate del = dm.CreateDelegate(_handleNamedMessageDelegateType);
 
-            // Register with CMM
             _regArgs2[0] = msgName;
             _regArgs2[1] = del;
             _registerHandlerMethod.Invoke(cmm, _regArgs2);
@@ -872,6 +1192,7 @@ namespace ScavShrapnelMod.Net
                     UnregisterSingle(cmm, MSG_SPAWN);
                     UnregisterSingle(cmm, MSG_SNAPSHOT);
                     UnregisterSingle(cmm, MSG_DESTROY);
+                    UnregisterSingle(cmm, MSG_STATE);
                 }
             }
             catch { /* best effort */ }
@@ -886,48 +1207,56 @@ namespace ScavShrapnelMod.Net
             _unregisterHandlerMethod.Invoke(cmm, _unregArgs1);
         }
 
-        //  CLIENT: RECEIVE HANDLERS
-        //  Parameter 'readerObj' is a boxed FastBufferReader.
-        //  Read methods operate on it via reflection (unboxing
-        //  happens inside the reflected method call).
+        //  CLIENT: RECEIVE HANDLERS (v3 — batched spawns/destroys)
 
         private void OnReceiveSpawnRaw(ulong senderId, object readerObj)
         {
             try
             {
-                _spawnsReceived++;
+                ushort count = ReadUshort(readerObj);
+                _spawnsReceived += count;
 
-                ushort netId = ReadUshort(readerObj);
-                short posX = ReadShort(readerObj);
-                short posY = ReadShort(readerObj);
-                byte typePacked = ReadByte(readerObj);
-                byte heatPacked = ReadByte(readerObj);
-                byte shapeIndex = ReadByte(readerObj);
-                ushort scalePacked = ReadUshort(readerObj);
-
-                float x = posX / 10f;
-                float y = posY / 10f;
-                var type = (ShrapnelProjectile.ShrapnelType)(typePacked & 0x07);
-                var weight = (ShrapnelWeight)((typePacked >> 3) & 0x07);
-                bool hasTrail = (typePacked & (1 << 6)) != 0;
-                float heat = heatPacked / 255f;
-                var shape = (ShrapnelVisuals.TriangleShape)Mathf.Clamp(shapeIndex, 0, 5);
-                float scale = scalePacked / 1000f;
-
-                // Overwrite duplicate (protection against double-delivery)
-                if (_mirrors.TryGetValue(netId, out var existing))
+                for (int n = 0; n < count; n++)
                 {
-                    if (existing != null && existing.gameObject != null)
-                        Destroy(existing.gameObject);
-                    _mirrors.Remove(netId);
+                    ushort netId = ReadUshort(readerObj);
+                    short posX = ReadShort(readerObj);
+                    short posY = ReadShort(readerObj);
+                    byte typePacked = ReadByte(readerObj);
+                    byte heatPacked = ReadByte(readerObj);
+                    byte shapeIndex = ReadByte(readerObj);
+                    ushort scalePacked = ReadUshort(readerObj);
+                    short velXPacked = ReadShort(readerObj);
+                    short velYPacked = ReadShort(readerObj);
+                    short rotZPacked = ReadShort(readerObj);
+
+                    float x = posX / 10f;
+                    float y = posY / 10f;
+                    var type = (ShrapnelProjectile.ShrapnelType)(typePacked & 0x07);
+                    var weight = (ShrapnelWeight)((typePacked >> 3) & 0x07);
+                    bool hasTrail = (typePacked & (1 << 6)) != 0;
+                    bool atRest = (typePacked & (1 << 7)) != 0;
+                    float heat = heatPacked / 255f;
+                    var shape = (ShrapnelVisuals.TriangleShape)Mathf.Clamp(shapeIndex, 0, 5);
+                    float scale = scalePacked / 1000f;
+                    float velX = velXPacked / 10f;
+                    float velY = velYPacked / 10f;
+                    float rotZ = rotZPacked / 100f;
+
+                    // Overwrite duplicate (protection against double-delivery)
+                    if (_mirrors.TryGetValue(netId, out var existing))
+                    {
+                        if (existing != null && existing.gameObject != null)
+                            Destroy(existing.gameObject);
+                        _mirrors.Remove(netId);
+                    }
+
+                    var mirror = ClientMirrorShrapnel.Create(
+                        netId, new Vector2(x, y), type, weight, heat, shape, scale,
+                        hasTrail, atRest, new Vector2(velX, velY), rotZ);
+
+                    if (mirror != null)
+                        _mirrors[netId] = mirror;
                 }
-
-                var mirror = ClientMirrorShrapnel.Create(
-                    netId, new Vector2(x, y), type, weight, heat, shape, scale,
-                    hasTrail);
-
-                if (mirror != null)
-                    _mirrors[netId] = mirror;
             }
             catch (Exception e)
             {
@@ -935,6 +1264,7 @@ namespace ScavShrapnelMod.Net
                     $"[ShrapnelNetSync] OnReceiveSpawn failed: {e.Message}");
             }
         }
+
 
         private void OnReceiveSnapshotRaw(ulong senderId, object readerObj)
         {
@@ -957,9 +1287,8 @@ namespace ScavShrapnelMod.Net
                     if (_mirrors.TryGetValue(netId, out var mirror))
                     {
                         if (mirror != null)
-                            mirror.SetTarget(new Vector2(x, y));
+                            mirror.OnSnapshotReceived(new Vector2(x, y));
                     }
-                    // else: spawn not yet received — silently ignore
                 }
             }
             catch (Exception e)
@@ -973,17 +1302,26 @@ namespace ScavShrapnelMod.Net
         {
             try
             {
-                _destroysReceived++;
+                ushort count = ReadUshort(readerObj);
+                _destroysReceived += count;
 
-                ushort netId = ReadUshort(readerObj);
-
-                if (_mirrors.TryGetValue(netId, out var mirror))
+                for (int n = 0; n < count; n++)
                 {
-                    if (mirror != null && mirror.gameObject != null)
-                        Destroy(mirror.gameObject);
-                    _mirrors.Remove(netId);
+                    ushort netId = ReadUshort(readerObj);
+
+                    if (_mirrors.TryGetValue(netId, out var mirror))
+                    {
+                        if (mirror != null && mirror.gameObject != null)
+                        {
+                            // WHY: BeginFadeDestroy instead of instant Destroy.
+                            // Mirror may still be visually flying (no collisions on client).
+                            // Instant destroy causes jarring mid-flight vanish.
+                            mirror.BeginFadeDestroy();
+                        }
+                        // Don't remove from _mirrors here — mirror removes itself
+                        // in OnDestroy via NotifyMirrorDestroyed.
+                    }
                 }
-                // else: already gone or never arrived — silently ignore
             }
             catch (Exception e)
             {
@@ -992,11 +1330,47 @@ namespace ScavShrapnelMod.Net
             }
         }
 
+        private void OnReceiveStateRaw(ulong senderId, object readerObj)
+        {
+            try
+            {
+                ushort count = ReadUshort(readerObj);
+                _statesReceived += count;
+
+                for (int i = 0; i < count; i++)
+                {
+                    ushort netId = ReadUshort(readerObj);
+                    byte state = ReadByte(readerObj);
+                    short posX = ReadShort(readerObj);
+                    short posY = ReadShort(readerObj);
+                    short rotZPacked = ReadShort(readerObj);
+
+                    bool atRest = state != 0;
+                    float x = posX / 10f;
+                    float y = posY / 10f;
+                    float rotZ = rotZPacked / 100f;
+
+                    if (_mirrors.TryGetValue(netId, out var mirror))
+                    {
+                        if (mirror != null)
+                        {
+                            if (atRest)
+                                mirror.TransitionToRest(new Vector2(x, y), rotZ);
+                            else
+                                mirror.TransitionToFlying(new Vector2(x, y));
+                        }
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                Plugin.Log.LogError(
+                    $"[ShrapnelNetSync] OnReceiveState failed: {e.Message}");
+            }
+        }
+
         //  DIAGNOSTICS API
 
-        /// <summary>
-        /// Returns detailed diagnostic string for shrapnel_net console command.
-        /// </summary>
         public static string GetDiagnostics()
         {
             if (_instance == null)
@@ -1008,24 +1382,23 @@ namespace ScavShrapnelMod.Net
             {
                 var clientIds = i.GetClientIds();
                 int clientCount = clientIds != null ? clientIds.Count : 0;
-
-                // Count fragments with trails for diagnostics
-                int trailCount = 0;
-                foreach (var kvp in i._tracked)
-                {
-                    if (kvp.Value != null && kvp.Value.HasTrail)
-                        trailCount++;
-                }
+                int flyingCount = i._tracked.Count - i._serverAtRest.Count;
 
                 return "=== SHRAPNEL NET SYNC ===\n" +
                     $"  Role: SERVER (host)\n" +
-                    $"  Tracked shrapnel: {i._tracked.Count} ({trailCount} with trail)\n" +
+                    $"  Tracked shrapnel: {i._tracked.Count}\n" +
+                    $"  Flying: {flyingCount} | At rest: {i._serverAtRest.Count}\n" +
+                    $"  Pending spawns: {i._pendingSpawns.Count}\n" +
+                    $"  Pending destroys: {i._pendingDestroys.Count}\n" +
+                    $"  Debouncing states: {i._stateChangeTime.Count}\n" +
                     $"  Next ID: {i._nextId}\n" +
                     $"  Spawns sent: {i._spawnsSent}\n" +
                     $"  Snapshots sent: {i._snapshotsSent}\n" +
+                    $"  States sent: {i._statesSent}\n" +
                     $"  Destroys sent: {i._destroysSent}\n" +
                     $"  Connected clients: {clientCount}\n" +
                     $"  Snapshot rate: {SnapshotHz} Hz\n" +
+                    $"  State debounce: {StateDebounceTime * 1000f:F0}ms\n" +
                     $"  Max tracked: {MaxShrapnel}";
             }
             else
@@ -1035,22 +1408,20 @@ namespace ScavShrapnelMod.Net
                     : -1f;
                 string ageStr = snapshotAge >= 0f ? $"{snapshotAge:F2}s ago" : "never";
 
-                // Count mirrors with trails for diagnostics
-                int trailMirrors = 0;
+                int restMirrors = 0;
                 foreach (var kvp in i._mirrors)
                 {
-                    if (kvp.Value != null)
-                    {
-                        var tr = kvp.Value.GetComponent<TrailRenderer>();
-                        if (tr != null) trailMirrors++;
-                    }
+                    if (kvp.Value != null && kvp.Value.IsAtRest)
+                        restMirrors++;
                 }
 
                 return "=== SHRAPNEL NET SYNC ===\n" +
                     $"  Role: CLIENT\n" +
-                    $"  Active mirrors: {i._mirrors.Count} ({trailMirrors} with trail)\n" +
+                    $"  Active mirrors: {i._mirrors.Count}\n" +
+                    $"  Flying: {i._mirrors.Count - restMirrors} | At rest: {restMirrors}\n" +
                     $"  Spawns received: {i._spawnsReceived}\n" +
                     $"  Snapshots received: {i._snapshotsReceived}\n" +
+                    $"  States received: {i._statesReceived}\n" +
                     $"  Destroys received: {i._destroysReceived}\n" +
                     $"  Last snapshot: {ageStr}\n" +
                     $"  Handlers registered: {i._handlersRegistered}\n" +
@@ -1058,9 +1429,6 @@ namespace ScavShrapnelMod.Net
             }
         }
 
-        /// <summary>
-        /// Returns brief one-line status for shrapnel_status command.
-        /// </summary>
         public static string GetBriefStatus()
         {
             if (_instance == null) return "NET:off";
@@ -1069,22 +1437,20 @@ namespace ScavShrapnelMod.Net
 
             if (MultiplayerHelper.IsServer)
             {
+                int flyingCount = i._tracked.Count - i._serverAtRest.Count;
                 return $"NET:SERVER tracked={i._tracked.Count}" +
-                    $" sent={i._spawnsSent}/{i._snapshotsSent}/{i._destroysSent}";
+                    $" fly={flyingCount} rest={i._serverAtRest.Count}" +
+                    $" sent={i._spawnsSent}/{i._snapshotsSent}/{i._statesSent}/{i._destroysSent}";
             }
             else
             {
                 return $"NET:CLIENT mirrors={i._mirrors.Count}" +
-                    $" recv={i._spawnsReceived}/{i._snapshotsReceived}/{i._destroysReceived}";
+                    $" recv={i._spawnsReceived}/{i._snapshotsReceived}/{i._statesReceived}/{i._destroysReceived}";
             }
         }
 
         //  CLIENT: MIRROR CLEANUP
 
-        /// <summary>
-        /// Called by ClientMirrorShrapnel.OnDestroy to remove itself
-        /// from the tracking dictionary. Safe to call with unknown netId.
-        /// </summary>
         internal static void NotifyMirrorDestroyed(ushort netId)
         {
             if (_instance == null) return;

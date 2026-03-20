@@ -39,7 +39,7 @@ namespace ScavShrapnelMod.Logic
         //  THROTTLING & DEBOUNCE
         // ───────────────────────────────────────────────────
 
-        private static Vector2 _lastSpawnPos = new Vector2(float.MinValue, float.MinValue);
+        private static Vector2 _lastSpawnPos = new(float.MinValue, float.MinValue);
         private static int _lastSpawnFrame = -999;
 
         /// <summary>Global maximum particle/shrapnel speed clamp.</summary>
@@ -88,28 +88,19 @@ namespace ScavShrapnelMod.Logic
 
             public static ProfileMultipliers ForProfile(ExplosionProfile p)
             {
-                switch (p)
+                return p switch
                 {
-                    case ExplosionProfile.Mine:
-                        return new ProfileMultipliers
-                        { SparkMult = 1.4f, GroundDebrisMult = 1f, ShrapnelMult = 1f };
-
-                    case ExplosionProfile.Dynamite:
-                        return new ProfileMultipliers
-                        { SparkMult = 0.7f, GroundDebrisMult = 2f, ShrapnelMult = 1.2f };
-
-                    case ExplosionProfile.Turret:
-                        return new ProfileMultipliers
-                        { SparkMult = 0.6f, GroundDebrisMult = 0.7f, ShrapnelMult = 0.8f };
-
-                    case ExplosionProfile.Gravbag:
-                        return new ProfileMultipliers
-                        { SparkMult = 0.5f, GroundDebrisMult = 0.3f, ShrapnelMult = 0.2f };
-
-                    default:
-                        return new ProfileMultipliers
-                        { SparkMult = 1f, GroundDebrisMult = 1f, ShrapnelMult = 1f };
-                }
+                    ExplosionProfile.Mine => new ProfileMultipliers
+                    { SparkMult = 1.4f, GroundDebrisMult = 1f, ShrapnelMult = 1f },
+                    ExplosionProfile.Dynamite => new ProfileMultipliers
+                    { SparkMult = 0.7f, GroundDebrisMult = 2f, ShrapnelMult = 1.2f },
+                    ExplosionProfile.Turret => new ProfileMultipliers
+                    { SparkMult = 0.6f, GroundDebrisMult = 0.7f, ShrapnelMult = 0.8f },
+                    ExplosionProfile.Gravbag => new ProfileMultipliers
+                    { SparkMult = 0.5f, GroundDebrisMult = 0.3f, ShrapnelMult = 0.2f },
+                    _ => new ProfileMultipliers
+                    { SparkMult = 1f, GroundDebrisMult = 1f, ShrapnelMult = 1f },
+                };
             }
         }
 
@@ -186,7 +177,7 @@ namespace ScavShrapnelMod.Logic
                 if (!TryRegisterSpawn(param.position)) return;
 
                 ExplosionLogger.Record(param);
-                System.Random rng = new System.Random(MakeSeed(param.position));
+                System.Random rng = new(MakeSeed(param.position));
                 float spawnMult = ShrapnelConfig.SpawnCountMultiplier.Value;
 
                 ClassifyExplosion(param, rng, out var type, out int count,
@@ -342,7 +333,7 @@ namespace ScavShrapnelMod.Logic
             {
                 if (param.range <= MinExplosionRange) return;
 
-                System.Random rng = new System.Random(MakeSeed(param.position) ^ 0x5A5A);
+                System.Random rng = new(MakeSeed(param.position) ^ 0x5A5A);
 
                 ClassifyExplosion(param, rng, out _, out _,
                     out _, out ExplosionProfile profile);
@@ -541,7 +532,7 @@ namespace ScavShrapnelMod.Logic
                 float speed = MathHelper.ClampSpeed(baseSpeed * rng.Range(2.5f, 4f) * speedMult,
                     GlobalMaxSpeed);
 
-                Color col = new Color(1f, 0.9f, 0.6f, 1f);
+                Color col = new(1f, 0.9f, 0.6f, 1f);
                 var vis = new VisualParticleParams(size, col, 15,
                     ShrapnelVisuals.TriangleShape.Needle);
                 var spark = new SparkParams(dir, speed, rng.Range(0.05f, 0.12f));
@@ -561,7 +552,7 @@ namespace ScavShrapnelMod.Logic
                 float speed = MathHelper.ClampSpeed(baseSpeed * rng.Range(1.5f, 2.5f) * speedMult,
                     GlobalMaxSpeed);
 
-                Color col = new Color(1f, 0.65f, 0.2f, 0.95f);
+                Color col = new(1f, 0.65f, 0.2f, 0.95f);
                 var vis = new VisualParticleParams(size, col, 14,
                     ShrapnelVisuals.TriangleShape.Shard);
                 var spark = new SparkParams(dir, speed, rng.Range(0.12f, 0.25f));
@@ -581,7 +572,7 @@ namespace ScavShrapnelMod.Logic
                 float speed = MathHelper.ClampSpeed(baseSpeed * rng.Range(0.8f, 1.5f) * speedMult,
                     GlobalMaxSpeed);
 
-                Color col = new Color(1f, 0.45f, 0.08f, 0.9f);
+                Color col = new(1f, 0.45f, 0.08f, 0.9f);
                 var vis = new VisualParticleParams(size, col, 13,
                     ShrapnelVisuals.TriangleShape.Chunk);
                 var spark = new SparkParams(dir, speed, rng.Range(0.2f, 0.4f));
@@ -728,12 +719,12 @@ namespace ScavShrapnelMod.Logic
 
         private static int GetAshCount(ShrapnelProjectile.ShrapnelType type, System.Random rng)
         {
-            switch (type)
+            return type switch
             {
-                case ShrapnelProjectile.ShrapnelType.Stone: return rng.Range(50, 80);
-                case ShrapnelProjectile.ShrapnelType.HeavyMetal: return rng.Range(20, 40);
-                default: return rng.Range(35, 60);
-            }
+                ShrapnelProjectile.ShrapnelType.Stone => rng.Range(50, 80),
+                ShrapnelProjectile.ShrapnelType.HeavyMetal => rng.Range(20, 40),
+                _ => rng.Range(35, 60),
+            };
         }
 
         // ───────────────────────────────────────────────────
@@ -931,10 +922,10 @@ namespace ScavShrapnelMod.Logic
                 Vector2 pos = epicenter + rng.InsideUnitCircle() * range * 1.2f
                     + Vector2.down * rng.Range(0f, 1f);
 
-                Color col = new Color(rng.Range(0.7f, 0.85f), rng.Range(0.6f, 0.72f),
+                Color col = new(rng.Range(0.7f, 0.85f), rng.Range(0.6f, 0.72f),
                     rng.Range(0.35f, 0.48f), rng.Range(0.35f, 0.65f));
 
-                Vector2 vel = new Vector2(rng.Range(-2.5f, 2.5f), rng.Range(0.5f, 4f));
+                Vector2 vel = new(rng.Range(-2.5f, 2.5f), rng.Range(0.5f, 4f));
                 var vis = new VisualParticleParams(rng.Range(0.08f, 0.28f), col, 11,
                     ShrapnelVisuals.TriangleShape.Chunk);
                 var phy = AshPhysicsParams.DesertDust(vel, rng.Range(8f, 25f), rng);
@@ -951,9 +942,9 @@ namespace ScavShrapnelMod.Logic
                 Vector2 pos = epicenter + rng.InsideUnitCircle() * range * 0.6f;
 
                 float gray = rng.Range(0.82f, 0.98f);
-                Color col = new Color(gray, gray, gray, rng.Range(0.25f, 0.55f));
+                Color col = new(gray, gray, gray, rng.Range(0.25f, 0.55f));
 
-                Vector2 vel = new Vector2(rng.Range(-0.6f, 0.6f), rng.Range(1.5f, 5f));
+                Vector2 vel = new(rng.Range(-0.6f, 0.6f), rng.Range(1.5f, 5f));
                 var vis = new VisualParticleParams(rng.Range(0.06f, 0.18f), col, 12,
                     ShrapnelVisuals.TriangleShape.Chunk);
                 var phy = AshPhysicsParams.ColdSteam(vel, rng.Range(4f, 10f), rng);

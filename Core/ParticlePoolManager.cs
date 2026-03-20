@@ -106,7 +106,7 @@ namespace ScavShrapnelMod.Core
             // Color fade
             var col = ps.colorOverLifetime;
             col.enabled = true;
-            Gradient grad = new Gradient();
+            Gradient grad = new();
             grad.SetKeys(
                 new[] { new GradientColorKey(Color.white, 0f),
                         new GradientColorKey(Color.white, 1f) },
@@ -125,7 +125,7 @@ namespace ScavShrapnelMod.Core
             // Size shrink over lifetime
             var size = ps.sizeOverLifetime;
             size.enabled = true;
-            AnimationCurve sizeCurve = new AnimationCurve(
+            AnimationCurve sizeCurve = new(
                 new Keyframe(0f, 1f),
                 new Keyframe(1f, 0.2f));
             size.size = new ParticleSystem.MinMaxCurve(1f, sizeCurve);

@@ -86,7 +86,7 @@ namespace ScavShrapnelMod.Core
         //  SPRITE CACHE
 
         private static readonly Dictionary<string, Sprite> _spriteCache =
-            new Dictionary<string, Sprite>(6);
+            new(6);
 
         //  SPRITE RENDERER MATERIALS (for physics shrapnel GameObjects)
 
@@ -347,7 +347,7 @@ namespace ScavShrapnelMod.Core
                     "Universal Render Pipeline/2D/Sprite-Lit-Default");
                 if (litShader != null && litShader.isSupported)
                 {
-                    Material mat = new Material(litShader);
+                    Material mat = new(litShader);
                     mat.SetTexture("_MainTex", ParticleTexture);
                     mat.renderQueue = 3000;
                     Console.Log($"[Visuals] {label}: using Sprite-Lit-Default for particles");
@@ -370,7 +370,7 @@ namespace ScavShrapnelMod.Core
                     if (srcMat == null || srcMat.shader == null) continue;
                     if (!srcMat.shader.name.Contains("Lit")) continue;
 
-                    Material clone = new Material(srcMat.shader);
+                    Material clone = new(srcMat.shader);
                     clone.CopyPropertiesFromMaterial(srcMat);
                     clone.SetTexture("_MainTex", ParticleTexture);
                     clone.renderQueue = 3000;
@@ -391,7 +391,7 @@ namespace ScavShrapnelMod.Core
         private static Texture2D CreateParticleTexture()
         {
             const int size = 16;
-            Texture2D tex = new Texture2D(size, size, TextureFormat.RGBA32, false)
+            Texture2D tex = new(size, size, TextureFormat.RGBA32, false)
             {
                 filterMode = FilterMode.Bilinear,
                 wrapMode = TextureWrapMode.Clamp
@@ -427,7 +427,7 @@ namespace ScavShrapnelMod.Core
                     Shader s = Shader.Find(shaderNames[i]);
                     if (s != null)
                     {
-                        Material mat = new Material(s);
+                        Material mat = new(s);
                         Console.Log($"[Visuals] {label} using: {shaderNames[i]}");
                         return mat;
                     }
@@ -449,7 +449,7 @@ namespace ScavShrapnelMod.Core
                 if (sr != null && sr.sharedMaterial != null
                     && sr.sharedMaterial.shader != null)
                 {
-                    Material cloned = new Material(sr.sharedMaterial.shader);
+                    Material cloned = new(sr.sharedMaterial.shader);
                     Console.Log($"[Visuals] {label} cloned from scene SpriteRenderer");
                     return cloned;
                 }
@@ -496,7 +496,7 @@ namespace ScavShrapnelMod.Core
                 return cached;
 
             const int size = 32;
-            Texture2D tex = new Texture2D(size, size, TextureFormat.RGBA32, false)
+            Texture2D tex = new(size, size, TextureFormat.RGBA32, false)
             {
                 filterMode = FilterMode.Point,
                 wrapMode = TextureWrapMode.Clamp
@@ -526,57 +526,50 @@ namespace ScavShrapnelMod.Core
 
         private static Vector2[] GetShapeVertices(TriangleShape shape)
         {
-            switch (shape)
+            return shape switch
             {
-                case TriangleShape.Acute:
-                    return new[]
-                    {
+                TriangleShape.Acute => new[]
+                                    {
                         new Vector2(0.45f, 1f),  new Vector2(0.7f, 0.6f),
                         new Vector2(0.9f, 0.15f), new Vector2(0.1f, 0f),
                         new Vector2(0.2f, 0.4f)
-                    };
-                case TriangleShape.Right:
-                    return new[]
+                    },
+                TriangleShape.Right => new[]
                     {
                         new Vector2(0f, 0.95f),  new Vector2(0.15f, 0.5f),
                         new Vector2(0f, 0.05f),  new Vector2(0.75f, 0f),
                         new Vector2(0.6f, 0.3f)
-                    };
-                case TriangleShape.Obtuse:
-                    return new[]
+                    },
+                TriangleShape.Obtuse => new[]
                     {
                         new Vector2(0.25f, 0.85f), new Vector2(0.55f, 0.7f),
                         new Vector2(1f, 0.1f),     new Vector2(0.6f, 0f),
                         new Vector2(0f, 0.05f),    new Vector2(0.1f, 0.5f)
-                    };
-                case TriangleShape.Shard:
-                    return new[]
+                    },
+                TriangleShape.Shard => new[]
                     {
                         new Vector2(0.35f, 1f),  new Vector2(0.55f, 0.65f),
                         new Vector2(0.85f, 0.05f), new Vector2(0.4f, 0.15f),
                         new Vector2(0f, 0.2f),   new Vector2(0.15f, 0.55f)
-                    };
-                case TriangleShape.Needle:
-                    return new[]
+                    },
+                TriangleShape.Needle => new[]
                     {
                         new Vector2(0.5f, 1f),  new Vector2(0.6f, 0.5f),
                         new Vector2(0.55f, 0f), new Vector2(0.4f, 0.3f),
                         new Vector2(0.45f, 0.7f)
-                    };
-                case TriangleShape.Chunk:
-                    return new[]
+                    },
+                TriangleShape.Chunk => new[]
                     {
                         new Vector2(0.1f, 0.9f), new Vector2(0.5f, 0.95f),
                         new Vector2(0.9f, 0.7f), new Vector2(0.95f, 0.15f),
                         new Vector2(0.4f, 0f),   new Vector2(0f, 0.1f),
                         new Vector2(0.15f, 0.5f)
-                    };
-                default:
-                    return new[]
+                    },
+                _ => new[]
                     {
                         new Vector2(0.5f, 1f), new Vector2(1f, 0f), new Vector2(0f, 0f)
-                    };
-            }
+                    },
+            };
         }
 
         private static bool PointInPolygon(Vector2 p, Vector2[] polygon)
@@ -600,25 +593,19 @@ namespace ScavShrapnelMod.Core
         /// <summary>Cold/resting color for the given shrapnel material type.</summary>
         public static Color GetColdColor(ShrapnelProjectile.ShrapnelType type)
         {
-            switch (type)
+            return type switch
             {
-                case ShrapnelProjectile.ShrapnelType.Metal:
-                    return new Color(0.30f, 0.30f, 0.35f);
-                case ShrapnelProjectile.ShrapnelType.HeavyMetal:
-                    return new Color(0.15f, 0.15f, 0.20f);
-                case ShrapnelProjectile.ShrapnelType.Stone:
-                    return new Color(0.50f, 0.45f, 0.40f);
-                case ShrapnelProjectile.ShrapnelType.Wood:
-                    return new Color(0.55f, 0.35f, 0.15f);
-                case ShrapnelProjectile.ShrapnelType.Electronic:
-                    return new Color(0.10f, 0.60f, 0.30f);
-                default:
-                    return Color.gray;
-            }
+                ShrapnelProjectile.ShrapnelType.Metal => new Color(0.30f, 0.30f, 0.35f),
+                ShrapnelProjectile.ShrapnelType.HeavyMetal => new Color(0.15f, 0.15f, 0.20f),
+                ShrapnelProjectile.ShrapnelType.Stone => new Color(0.50f, 0.45f, 0.40f),
+                ShrapnelProjectile.ShrapnelType.Wood => new Color(0.55f, 0.35f, 0.15f),
+                ShrapnelProjectile.ShrapnelType.Electronic => new Color(0.10f, 0.60f, 0.30f),
+                _ => Color.gray,
+            };
         }
 
         /// <summary>Hot/glowing color shared by all shrapnel types (orange).</summary>
-        public static Color GetHotColor() => new Color(1f, 0.55f, 0.1f);
+        public static Color GetHotColor() => new(1f, 0.55f, 0.1f);
     }
 
     //  WEIGHT ENUM

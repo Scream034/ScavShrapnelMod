@@ -17,7 +17,7 @@ namespace ScavShrapnelMod.Core
     /// </summary>
     public static class DebrisTracker
     {
-        private static readonly RingBuffer _physical = new RingBuffer(512);
+        private static readonly RingBuffer _physical = new(512);
 
         /// <summary>
         /// Registers a physical shrapnel GameObject (ShrapnelProjectile).

@@ -51,24 +51,24 @@ namespace ScavShrapnelMod.Helpers
             if (info == null) return MaterialCategory.Unknown;
             if (info.metallic) return MaterialCategory.Metal;
 
-            string hit  = info.hitsound ?? string.Empty;
+            string hit = info.hitsound ?? string.Empty;
             string step = info.stepsound ?? string.Empty;
 
             // WHY: hitsound is the primary material indicator.
             // stepsound refines ambiguous cases (sand vs snow, glass vs ice).
 
             if (hit == "steel" || hit == "scrapmetal") return MaterialCategory.Metal;
-            if (hit == "rock")      return MaterialCategory.Rock;
-            if (hit == "sand")      return (step == "Snow") ? MaterialCategory.Snow : MaterialCategory.Sand;
-            if (hit == "dirt")      return MaterialCategory.Dirt;
-            if (hit == "wood")      return MaterialCategory.Wood;
-            if (hit == "concrete")  return MaterialCategory.Concrete;
-            if (hit == "glass")     return (step == "Ice") ? MaterialCategory.Ice : MaterialCategory.Glass;
-            if (hit == "rubber")    return (step == "Plastic") ? MaterialCategory.Plastic : MaterialCategory.Rubber;
-            if (hit == "rustle")    return MaterialCategory.Organic;
-            if (hit == "gore2")     return MaterialCategory.Organic;
-            if (hit == "trash")     return MaterialCategory.Trash;
-            if (hit == "crystal")   return MaterialCategory.Ore;
+            if (hit == "rock") return MaterialCategory.Rock;
+            if (hit == "sand") return (step == "Snow") ? MaterialCategory.Snow : MaterialCategory.Sand;
+            if (hit == "dirt") return MaterialCategory.Dirt;
+            if (hit == "wood") return MaterialCategory.Wood;
+            if (hit == "concrete") return MaterialCategory.Concrete;
+            if (hit == "glass") return (step == "Ice") ? MaterialCategory.Ice : MaterialCategory.Glass;
+            if (hit == "rubber") return (step == "Plastic") ? MaterialCategory.Plastic : MaterialCategory.Rubber;
+            if (hit == "rustle") return MaterialCategory.Organic;
+            if (hit == "gore2") return MaterialCategory.Organic;
+            if (hit == "trash") return MaterialCategory.Trash;
+            if (hit == "crystal") return MaterialCategory.Ore;
 
             return MaterialCategory.Unknown;
         }
@@ -81,24 +81,24 @@ namespace ScavShrapnelMod.Helpers
         /// </summary>
         public static float GetDustMultiplier(MaterialCategory cat)
         {
-            switch (cat)
+            return cat switch
             {
-                case MaterialCategory.Sand:     return 1.3f;
-                case MaterialCategory.Snow:     return 1.25f;
-                case MaterialCategory.Dirt:     return 1.2f;
-                case MaterialCategory.Organic:  return 1.15f;
-                case MaterialCategory.Trash:    return 1.1f;
-                case MaterialCategory.Glass:    return 1.1f;
-                case MaterialCategory.Ice:      return 1.1f;
-                case MaterialCategory.Wood:     return 1.05f;
-                case MaterialCategory.Plastic:  return 1.0f;
-                case MaterialCategory.Rubber:   return 0.95f;
-                case MaterialCategory.Rock:     return 0.9f;
-                case MaterialCategory.Concrete: return 0.9f;
-                case MaterialCategory.Ore:      return 0.85f;
-                case MaterialCategory.Metal:    return 0.8f;
-                default:                        return 1.0f;
-            }
+                MaterialCategory.Sand => 1.3f,
+                MaterialCategory.Snow => 1.25f,
+                MaterialCategory.Dirt => 1.2f,
+                MaterialCategory.Organic => 1.15f,
+                MaterialCategory.Trash => 1.1f,
+                MaterialCategory.Glass => 1.1f,
+                MaterialCategory.Ice => 1.1f,
+                MaterialCategory.Wood => 1.05f,
+                MaterialCategory.Plastic => 1.0f,
+                MaterialCategory.Rubber => 0.95f,
+                MaterialCategory.Rock => 0.9f,
+                MaterialCategory.Concrete => 0.9f,
+                MaterialCategory.Ore => 0.85f,
+                MaterialCategory.Metal => 0.8f,
+                _ => 1.0f,
+            };
         }
 
         /// <summary>
@@ -119,10 +119,10 @@ namespace ScavShrapnelMod.Helpers
 
                 case MaterialCategory.Snow:
                     // White with slight blue tint
-                {
-                    float w = rng.Range(0.85f, 0.97f);
-                    return new Color(w * 0.98f, w, w * 1.02f);
-                }
+                    {
+                        float w = rng.Range(0.85f, 0.97f);
+                        return new Color(w * 0.98f, w, w * 1.02f);
+                    }
 
                 case MaterialCategory.Dirt:
                     // Dark earthy brown
@@ -133,24 +133,24 @@ namespace ScavShrapnelMod.Helpers
 
                 case MaterialCategory.Rock:
                     // Neutral gray with slight warm tint
-                {
-                    float g = rng.Range(0.38f, 0.56f);
-                    return new Color(g, g * 0.97f, g * 0.93f);
-                }
+                    {
+                        float g = rng.Range(0.38f, 0.56f);
+                        return new Color(g, g * 0.97f, g * 0.93f);
+                    }
 
                 case MaterialCategory.Concrete:
                     // Light gray, slightly warmer than rock
-                {
-                    float g = rng.Range(0.45f, 0.6f);
-                    return new Color(g * 1.02f, g, g * 0.96f);
-                }
+                    {
+                        float g = rng.Range(0.45f, 0.6f);
+                        return new Color(g * 1.02f, g, g * 0.96f);
+                    }
 
                 case MaterialCategory.Metal:
                     // Cool blue-gray (steel/alloy tint)
-                {
-                    float g = rng.Range(0.28f, 0.44f);
-                    return new Color(g * 0.92f, g * 0.96f, g * 1.1f);
-                }
+                    {
+                        float g = rng.Range(0.28f, 0.44f);
+                        return new Color(g * 0.92f, g * 0.96f, g * 1.1f);
+                    }
 
                 case MaterialCategory.Wood:
                     // Warm medium brown
@@ -161,31 +161,31 @@ namespace ScavShrapnelMod.Helpers
 
                 case MaterialCategory.Glass:
                     // Light blue-white (transparent debris)
-                {
-                    float g = rng.Range(0.6f, 0.78f);
-                    return new Color(g * 0.92f, g * 0.97f, g * 1.05f);
-                }
+                    {
+                        float g = rng.Range(0.6f, 0.78f);
+                        return new Color(g * 0.92f, g * 0.97f, g * 1.05f);
+                    }
 
                 case MaterialCategory.Ice:
                     // Pale blue (colder than glass)
-                {
-                    float g = rng.Range(0.65f, 0.82f);
-                    return new Color(g * 0.88f, g * 0.95f, g * 1.08f);
-                }
+                    {
+                        float g = rng.Range(0.65f, 0.82f);
+                        return new Color(g * 0.88f, g * 0.95f, g * 1.08f);
+                    }
 
                 case MaterialCategory.Rubber:
                     // Very dark gray (tire-black)
-                {
-                    float g = rng.Range(0.12f, 0.22f);
-                    return new Color(g, g, g);
-                }
+                    {
+                        float g = rng.Range(0.12f, 0.22f);
+                        return new Color(g, g, g);
+                    }
 
                 case MaterialCategory.Plastic:
                     // Light off-white gray
-                {
-                    float g = rng.Range(0.55f, 0.72f);
-                    return new Color(g * 1.01f, g, g * 0.97f);
-                }
+                    {
+                        float g = rng.Range(0.55f, 0.72f);
+                        return new Color(g * 1.01f, g, g * 0.97f);
+                    }
 
                 case MaterialCategory.Organic:
                     // Green-brown (plant/fungal)
@@ -196,24 +196,24 @@ namespace ScavShrapnelMod.Helpers
 
                 case MaterialCategory.Trash:
                     // Dark mixed gray-brown
-                {
-                    float g = rng.Range(0.2f, 0.35f);
-                    return new Color(g * 1.1f, g * 0.95f, g * 0.85f);
-                }
+                    {
+                        float g = rng.Range(0.2f, 0.35f);
+                        return new Color(g * 1.1f, g * 0.95f, g * 0.85f);
+                    }
 
                 case MaterialCategory.Ore:
                     // Copper-tinted (warm metallic)
-                {
-                    float g = rng.Range(0.35f, 0.5f);
-                    return new Color(g * 1.25f, g * 0.85f, g * 0.55f);
-                }
+                    {
+                        float g = rng.Range(0.35f, 0.5f);
+                        return new Color(g * 1.25f, g * 0.85f, g * 0.55f);
+                    }
 
                 default:
                     // Unknown: safe neutral gray
-                {
-                    float g = rng.Range(0.35f, 0.5f);
-                    return new Color(g, g * 0.98f, g * 0.95f);
-                }
+                    {
+                        float g = rng.Range(0.35f, 0.5f);
+                        return new Color(g, g * 0.98f, g * 0.95f);
+                    }
             }
         }
 

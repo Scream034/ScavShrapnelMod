@@ -62,11 +62,11 @@ namespace ScavShrapnelMod.Effects
 
             float darkness = rng.Range(0.08f, 0.25f);
             float alpha = rng.Range(0.4f, 0.7f);
-            Color smokeColor = new Color(darkness, darkness * 0.95f, darkness * 0.9f, alpha);
+            Color smokeColor = new(darkness, darkness * 0.95f, darkness * 0.9f, alpha);
 
             float upSpeed = rng.Range(1.5f, 4f) * (1f + power * 0.5f);
             float sideSpeed = rng.Range(-0.8f, 0.8f);
-            Vector2 velocity = new Vector2(sideSpeed, upSpeed);
+            Vector2 velocity = new(sideSpeed, upSpeed);
 
             float lifetime = rng.Range(12f, 25f) * ShrapnelConfig.SmokeColumnLifetimeMultiplier.Value;
             float scale = rng.Range(0.15f, 0.45f) * (1f + power * 0.5f);
@@ -95,9 +95,9 @@ namespace ScavShrapnelMod.Effects
             Vector2 pos = epicenter + offset;
 
             float darkness = rng.Range(0.05f, 0.15f);
-            Color smokeColor = new Color(darkness, darkness, darkness, rng.Range(0.6f, 0.85f));
+            Color smokeColor = new(darkness, darkness, darkness, rng.Range(0.6f, 0.85f));
 
-            Vector2 velocity = new Vector2(rng.Range(-0.3f, 0.3f), rng.Range(2f, 5f));
+            Vector2 velocity = new(rng.Range(-0.3f, 0.3f), rng.Range(2f, 5f));
             float lifetime = rng.Range(8f, 18f) * ShrapnelConfig.SmokeColumnLifetimeMultiplier.Value;
             float scale = rng.Range(0.25f, 0.6f) * (1f + power);
 
@@ -144,7 +144,7 @@ namespace ScavShrapnelMod.Effects
             Vector2 pos = epicenter + offset;
 
             float heat = rng.Range(0.6f, 1f);
-            Color emberColor = new Color(
+            Color emberColor = new(
                 1f,
                 Mathf.Lerp(0.3f, 0.7f, heat),
                 Mathf.Lerp(0f, 0.2f, heat * 0.5f),
@@ -161,7 +161,7 @@ namespace ScavShrapnelMod.Effects
             // Arc outward and upward, then fall
             float angle = rng.NextAngle();
             float speed = rng.Range(4f, 12f) * (0.7f + power * 0.5f);
-            Vector2 dir = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle) * 0.5f + 0.5f);
+            Vector2 dir = new(Mathf.Cos(angle), Mathf.Sin(angle) * 0.5f + 0.5f);
             Vector2 velocity = dir * speed;
 
             var physics = AshPhysicsParams.Ember(
@@ -184,7 +184,7 @@ namespace ScavShrapnelMod.Effects
             Vector2 offset = rng.InsideUnitCircle() * 0.3f;
             Vector2 pos = epicenter + offset;
 
-            Color chunkColor = new Color(
+            Color chunkColor = new(
                 rng.Range(0.8f, 1f),
                 rng.Range(0.4f, 0.6f),
                 rng.Range(0.1f, 0.25f),
@@ -200,7 +200,7 @@ namespace ScavShrapnelMod.Effects
             // Slower, heavier arc
             float angle = rng.NextAngle();
             float speed = rng.Range(3f, 8f) * (0.5f + power * 0.5f);
-            Vector2 dir = new Vector2(Mathf.Cos(angle), Mathf.Abs(Mathf.Sin(angle)) * 0.7f + 0.3f);
+            Vector2 dir = new(Mathf.Cos(angle), Mathf.Abs(Mathf.Sin(angle)) * 0.7f + 0.3f);
             Vector2 velocity = dir * speed;
 
             var physics = AshPhysicsParams.Ember(
@@ -249,13 +249,13 @@ namespace ScavShrapnelMod.Effects
 
             Vector2 pos = epicenter + offset;
 
-            Color dustColor = new Color(
+            Color dustColor = new(
                 baseColor.r * rng.Range(0.85f, 1.15f),
                 baseColor.g * rng.Range(0.85f, 1.15f),
                 baseColor.b * rng.Range(0.85f, 1.15f),
                 rng.Range(0.25f, 0.5f));
 
-            Vector2 velocity = new Vector2(
+            Vector2 velocity = new(
                 rng.Range(-0.5f, 0.5f),
                 rng.Range(0.1f, 0.6f));
 
@@ -285,13 +285,13 @@ namespace ScavShrapnelMod.Effects
             Vector2 offset = rng.InsideUnitCircle() * 0.8f;
             Vector2 pos = epicenter + offset;
 
-            Color dustColor = new Color(
+            Color dustColor = new(
                 baseColor.r * 0.7f,
                 baseColor.g * 0.7f,
                 baseColor.b * 0.7f,
                 rng.Range(0.4f, 0.65f));
 
-            Vector2 velocity = new Vector2(
+            Vector2 velocity = new(
                 rng.Range(-0.3f, 0.3f),
                 rng.Range(0.2f, 0.8f));
 

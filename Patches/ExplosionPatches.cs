@@ -7,7 +7,6 @@ using UnityEngine;
 
 namespace ScavShrapnelMod.Patches
 {
-    // ═══════════════════════════════════════════════════════════════
     //  SHARED: Explosion tracking to prevent double-spawning
     //
     //  WHY: Multiple detection layers can catch the same explosion.
@@ -16,12 +15,11 @@ namespace ScavShrapnelMod.Patches
     //
     //  Hash uses rounded position (×10) to absorb float drift.
     //  Queue evicts old entries to prevent unbounded growth.
-    // ═══════════════════════════════════════════════════════════════
 
     public static class ExplosionTracker
     {
-        private static readonly HashSet<int> _recent = new HashSet<int>();
-        private static readonly Queue<int> _cleanup = new Queue<int>();
+        private static readonly HashSet<int> _recent = new();
+        private static readonly Queue<int> _cleanup = new();
         private const int MaxTracked = 100;
 
         /// <summary>
@@ -52,7 +50,6 @@ namespace ScavShrapnelMod.Patches
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════
     //  LAYER 1: Direct replacement of WorldGeneration.CreateExplosion
     //
     //  Prefix returns false — completely replaces the original method.
@@ -66,7 +63,6 @@ namespace ScavShrapnelMod.Patches
     //
     //  IMPORTANT: This patch may NOT fire if JIT inlines CreateExplosion.
     //  In that case, Layer 2 (DestroyBackup) catches the explosion.
-    // ═══════════════════════════════════════════════════════════════
 
     public static class CreateExplosionPatch
     {
@@ -293,7 +289,7 @@ namespace ScavShrapnelMod.Patches
 
             Collider2D[] array = Physics2D.OverlapCircleAll(
                 param.position, param.range);
-            List<Limb> list = new List<Limb>();
+            List<Limb> list = new();
 
             foreach (Collider2D col in array)
             {
@@ -387,7 +383,6 @@ namespace ScavShrapnelMod.Patches
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════
     //  LAYER 2: GameObject.Destroy backup
     //
     //  Catches explosions when:
@@ -402,13 +397,12 @@ namespace ScavShrapnelMod.Patches
     //
     //  Calls BOTH PreExplosion and PostExplosion.
     //  PostExplosion uses preScan=true because blocks aren't destroyed yet.
-    // ═══════════════════════════════════════════════════════════════
 
     [HarmonyPatch(typeof(UnityEngine.Object), "Destroy",
       new[] { typeof(UnityEngine.Object), typeof(float) })]
     public static class GameObjectDestroyPatch
     {
-        private static readonly HashSet<int> _processedObjects = new HashSet<int>();
+        private static readonly HashSet<int> _processedObjects = new();
 
         [HarmonyPrefix]
         public static void Prefix(UnityEngine.Object obj, float t)
@@ -640,18 +634,16 @@ namespace ScavShrapnelMod.Patches
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════
     //  LAYER 3: TurretScript.Update — turret death detection
     //
     //  Monitors turret health every frame. When health drops to 0,
     //  spawns shrapnel immediately.
     //  Calls both PreExplosion and PostExplosion (preScan=true).
-    // ═══════════════════════════════════════════════════════════════
 
     [HarmonyPatch(typeof(TurretScript), "Update")]
     public static class TurretUpdatePatch
     {
-        private static readonly HashSet<int> _explodedTurrets = new HashSet<int>();
+        private static readonly HashSet<int> _explodedTurrets = new();
 
         [HarmonyPostfix]
         public static void Postfix(TurretScript __instance)
@@ -700,9 +692,7 @@ namespace ScavShrapnelMod.Patches
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════
     //  LAYER 4: TurretScript.Shoot — bullet impact shrapnel
-    // ═══════════════════════════════════════════════════════════════
 
     [HarmonyPatch(typeof(TurretScript), nameof(TurretScript.Shoot))]
     public static class TurretShootPatch

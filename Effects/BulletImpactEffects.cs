@@ -91,7 +91,7 @@ namespace ScavShrapnelMod.Effects
             Vector2 pos = hitPoint + rng.InsideUnitCircle() * 0.05f;
 
             float heat = rng.Range(0.7f, 1f);
-            Color sparkColor = new Color(
+            Color sparkColor = new(
                 1f,
                 Mathf.Lerp(0.5f, 0.9f, heat),
                 Mathf.Lerp(0.1f, 0.4f, heat),
@@ -126,7 +126,7 @@ namespace ScavShrapnelMod.Effects
         {
             Vector2 pos = hitPoint + rng.InsideUnitCircle() * 0.08f;
 
-            Color sparkColor = new Color(
+            Color sparkColor = new(
                 1f,
                 rng.Range(0.6f, 0.85f),
                 rng.Range(0.2f, 0.4f),
@@ -207,7 +207,7 @@ namespace ScavShrapnelMod.Effects
             Vector2 pos = hitPoint + rng.InsideUnitCircle() * 0.06f;
 
             float gray = rng.Range(0.25f, 0.45f);
-            Color chipColor = new Color(gray, gray, gray * 1.05f, 0.9f);
+            Color chipColor = new(gray, gray, gray * 1.05f, 0.9f);
 
             var visual = new VisualParticleParams(
                 rng.Range(0.03f, 0.09f),

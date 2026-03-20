@@ -56,7 +56,7 @@ namespace ScavShrapnelMod.Core
             _activeRing = new int[capacity];
             _activeMap = new bool[capacity];
 
-            GameObject containerObj = new GameObject($"AshPool_{name}");
+            GameObject containerObj = new($"AshPool_{name}");
             UnityEngine.Object.DontDestroyOnLoad(containerObj);
             containerObj.hideFlags = HideFlags.HideAndDontSave;
             _container = containerObj.transform;
@@ -73,7 +73,7 @@ namespace ScavShrapnelMod.Core
 
         private AshParticlePooled CreateParticle(int index)
         {
-            GameObject obj = new GameObject($"Ash_{_name}_{index}");
+            GameObject obj = new($"Ash_{_name}_{index}");
             obj.transform.SetParent(_container, true);
             obj.SetActive(false);
 

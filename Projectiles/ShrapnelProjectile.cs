@@ -6,7 +6,7 @@ using ScavShrapnelMod.Core;
 namespace ScavShrapnelMod.Projectiles
 {
     /// <summary>
-    /// Main shrapnel component. FSM: Flying = Stuck / Debris.
+    /// Main shrapnel component. FSM: Flying → Stuck / Debris.
     ///
     /// MULTIPLAYER: This component exists ONLY on the server (host).
     /// Clients receive visual mirrors (ClientMirrorShrapnel) via ShrapnelNetSync.
@@ -19,25 +19,25 @@ namespace ScavShrapnelMod.Projectiles
 
         //  CONSTANTS
 
-        private const int   GroundLayer              = 6;
-        private const float MaxVelocity              = 100f;
-        private const float PhysicsDelaySeconds      = 0.05f;
-        private const int   MaxBlocksToDestroy       = 3;
-        private const int   MaxRicochets             = 3;
-        private const float RicochetMaxAngleDeg      = 30f;
-        private const float RicochetSpeedRetention   = 0.7f;
-        private const float RicochetMinSpeed         = 5f;
-        private const float MinFlySqrSpeed           = 0.5f;
-        private const float MinFlyTimeBeforeDebris   = 0.3f;
-        private const float MinBlockImpactSpeed      = 3f;
-        private const float SparkImpactSpeed         = 9f;
+        private const int GroundLayer = 6;
+        private const float MaxVelocity = 100f;
+        private const float PhysicsDelaySeconds = 0.05f;
+        private const int MaxBlocksToDestroy = 3;
+        private const int MaxRicochets = 3;
+        private const float RicochetMaxAngleDeg = 30f;
+        private const float RicochetSpeedRetention = 0.7f;
+        private const float RicochetMinSpeed = 5f;
+        private const float MinFlySqrSpeed = 0.5f;
+        private const float MinFlyTimeBeforeDebris = 0.3f;
+        private const float MinBlockImpactSpeed = 3f;
+        private const float SparkImpactSpeed = 9f;
 
         // Visual constants sourced from ShrapnelVisuals (single source of truth).
         // See ShrapnelVisuals for documentation on each value.
-        private const float HeatCoolRate           = ShrapnelVisuals.HeatCoolRate;
-        private const float HotThreshold           = ShrapnelVisuals.HotThreshold;
+        private const float HeatCoolRate = ShrapnelVisuals.HeatCoolRate;
+        private const float HotThreshold = ShrapnelVisuals.HotThreshold;
         private const float OutlineScaleMultiplier = ShrapnelVisuals.OutlineScale;
-        private const float OutlineAlphaBase       = ShrapnelVisuals.OutlineAlphaBase;
+        private const float OutlineAlphaBase = ShrapnelVisuals.OutlineAlphaBase;
 
         //  PUBLIC FIELDS
 
@@ -128,10 +128,10 @@ namespace ScavShrapnelMod.Projectiles
 
         private void Awake()
         {
-            rb       = GetComponent<Rigidbody2D>();
-            sr       = GetComponent<SpriteRenderer>();
-            trail    = GetComponent<TrailRenderer>();
-            _col     = GetComponent<Collider2D>();
+            rb = GetComponent<Rigidbody2D>();
+            sr = GetComponent<SpriteRenderer>();
+            trail = GetComponent<TrailRenderer>();
+            _col = GetComponent<Collider2D>();
             _transform = transform;
 
             frameSlot = Mathf.Abs(GetInstanceID()) % 10;
@@ -169,9 +169,9 @@ namespace ScavShrapnelMod.Projectiles
             int frame = Time.frameCount;
             switch (state)
             {
-                case State.Flying:  UpdateFlying(frame);  break;
-                case State.Stuck:   UpdateStuck(frame);   break;
-                case State.Debris:  UpdateDebris(frame);  break;
+                case State.Flying: UpdateFlying(frame); break;
+                case State.Stuck: UpdateStuck(frame); break;
+                case State.Debris: UpdateDebris(frame); break;
             }
         }
 
@@ -219,7 +219,10 @@ namespace ScavShrapnelMod.Projectiles
             { Destroy(gameObject); return; }
 
             if (!_outlineApplied) { CreateOutline(); _outlineApplied = true; }
-            ApplyVisualDecay();
+            // WHY: ApplyVisualDecay now returns true if shard was destroyed
+            // (visually depleted). Must exit immediately — subsequent calls
+            // to PulseOutline/CheckSupportAndFall would access destroyed GO.
+            if (ApplyVisualDecay()) return;
 
             if (frame % 5 == frameSlot % 5) PulseOutline();
             if (frame % 10 == frameSlot) CheckSupportAndFall();
@@ -232,7 +235,10 @@ namespace ScavShrapnelMod.Projectiles
             { Destroy(gameObject); return; }
 
             if (!_outlineApplied) { CreateOutline(); _outlineApplied = true; }
-            ApplyVisualDecay();
+            // WHY: ApplyVisualDecay now returns true if shard was destroyed
+            // (visually depleted). Must exit immediately to avoid accessing
+            // components on a destroyed GameObject.
+            if (ApplyVisualDecay()) return;
 
             if (frame % 5 == frameSlot % 5) PulseOutline();
             if (frame % 30 == frameSlot) CheckSubmerged();
@@ -241,13 +247,49 @@ namespace ScavShrapnelMod.Projectiles
 
         //  VISUAL DECAY
 
-        private void ApplyVisualDecay()
+        /// <summary>
+        /// Applies scale and alpha decay during the final 30% of shard lifetime.
+        /// Returns true if the shard was destroyed (caller must return immediately).
+        ///
+        /// WHY EARLY DESTROY: Without this, the collider remains active while
+        /// the shard is visually invisible (~21% scale, ~11% alpha). Stuck shards
+        /// block physics; Debris shards deal step-on damage via OnTriggerEnter2D.
+        /// Players take damage from shards they cannot see — reported in both
+        /// singleplayer and multiplayer.
+        ///
+        /// WHY COLLIDER DISABLE: Safety margin before destroy threshold.
+        /// At decayFactor &lt; 0.15 (~32% scale, ~24% alpha) the shard provides
+        /// no visual feedback for the damage it deals. Disabling the collider
+        /// earlier prevents the invisible-damage window entirely.
+        /// </summary>
+        /// <returns>True if the shard was destroyed and caller should return.</returns>
+        private bool ApplyVisualDecay()
         {
             float t = NormalizedLifetime;
-            if (t > 0.3f) return;
+            if (t > 0.3f) return false;
+
+            // WHY: Shard is visually depleted — destroy to prevent invisible collider
+            // dealing damage or blocking physics. At NormalizedLifetime=0.02:
+            // scale ≈ 21%, alpha ≈ 11% — effectively invisible to the player.
+            // For 300s debris lifetime, this triggers at ~294s (6s early — imperceptible).
+            if (t <= 0.02f)
+            {
+                Destroy(gameObject);
+                return true;
+            }
 
             float decayT = t / 0.3f;
             float decayFactor = decayT * decayT * (3f - 2f * decayT);
+
+            // WHY: Disable collider before shard is fully invisible to prevent
+            // damage from nearly-invisible fragments. At decayFactor=0.15:
+            // scale ≈ 32%, alpha ≈ 24% — barely visible, no gameplay value
+            // in dealing damage. Prevents the invisible-damage window between
+            // "too small to see" and "early destroy threshold".
+            // PERF: Only checks once — _col.enabled becomes false permanently.
+            if (decayFactor < 0.15f && _col != null && _col.enabled)
+                _col.enabled = false;
+
             _transform.localScale = _originalScale * (0.2f + 0.8f * decayFactor);
             _transform.Rotate(0f, 0f, (1f - decayFactor) * 360f * Time.deltaTime);
 
@@ -257,6 +299,8 @@ namespace ScavShrapnelMod.Projectiles
                 c.a = Mathf.Lerp(0.1f, 1f, decayFactor);
                 sr.color = c;
             }
+
+            return false;
         }
 
         //  OUTLINE
@@ -343,12 +387,12 @@ namespace ScavShrapnelMod.Projectiles
 
             switch (Weight)
             {
-                case ShrapnelWeight.Micro:   rb.gravityScale = 0.1f;  break;
-                case ShrapnelWeight.Hot:     rb.gravityScale = 0.3f;  break;
-                case ShrapnelWeight.Medium:  rb.gravityScale = 0.15f; break;
-                case ShrapnelWeight.Heavy:   rb.gravityScale = 0.35f; break;
-                case ShrapnelWeight.Massive: rb.gravityScale = 0.5f;  break;
-                default:                     rb.gravityScale = 0.5f;  break;
+                case ShrapnelWeight.Micro: rb.gravityScale = 0.1f; break;
+                case ShrapnelWeight.Hot: rb.gravityScale = 0.3f; break;
+                case ShrapnelWeight.Medium: rb.gravityScale = 0.15f; break;
+                case ShrapnelWeight.Heavy: rb.gravityScale = 0.35f; break;
+                case ShrapnelWeight.Massive: rb.gravityScale = 0.5f; break;
+                default: rb.gravityScale = 0.5f; break;
             }
 
             if (_col != null) _col.isTrigger = false;
@@ -356,12 +400,26 @@ namespace ScavShrapnelMod.Projectiles
         }
 
         //  COLLISION
+        //
+        //  BUG FIX: Previously, debris/stuck shards called BreakShard() for
+        //  ANY collision with velocity >5, including other shrapnel. This caused
+        //  chain destruction during explosions — 87 of 92 shards destroyed by
+        //  other shards flying through debris trigger/collision volumes.
+        //  Client mirrors vanished mid-flight because the server destroyed them
+        //  before the state debounce could send a REST transition.
+        //
+        //  NOW: Only break debris from high-velocity impacts with non-shrapnel
+        //  objects (terrain, entities). Other shrapnel fragments are filtered out.
 
         private void OnCollisionEnter2D(Collision2D collision)
         {
             if (state == State.Debris || state == State.Stuck)
             {
-                if (collision.relativeVelocity.magnitude > 5f) BreakShard();
+                // WHY: Filter out shrapnel-on-shrapnel contacts to prevent chain
+                // destruction. Only non-shrapnel high-velocity impacts can break debris.
+                if (collision.relativeVelocity.magnitude > 5f
+                    && !collision.collider.TryGetComponent<ShrapnelProjectile>(out _))
+                    BreakShard();
                 return;
             }
             if (state != State.Flying) return;
@@ -483,7 +541,7 @@ namespace ScavShrapnelMod.Projectiles
             float impactSpeed = collision.relativeVelocity.magnitude;
             if (impactSpeed < MinBlockImpactSpeed) { BecomeDebris(); return; }
 
-            Vector2 hitPoint  = collision.GetContact(0).point;
+            Vector2 hitPoint = collision.GetContact(0).point;
             Vector2 hitNormal = collision.GetContact(0).normal;
 
             if (TryRicochet(impactSpeed, hitPoint, hitNormal)) return;
@@ -564,9 +622,9 @@ namespace ScavShrapnelMod.Projectiles
             float breakThreshold, breakChance;
             switch (Weight)
             {
-                case ShrapnelWeight.Massive: breakThreshold = 8f;  breakChance = 0.6f; break;
-                case ShrapnelWeight.Heavy:   breakThreshold = 15f; breakChance = 0.35f; break;
-                case ShrapnelWeight.Medium:  breakThreshold = 20f; breakChance = 0.2f; break;
+                case ShrapnelWeight.Massive: breakThreshold = 8f; breakChance = 0.6f; break;
+                case ShrapnelWeight.Heavy: breakThreshold = 15f; breakChance = 0.35f; break;
+                case ShrapnelWeight.Medium: breakThreshold = 20f; breakChance = 0.2f; break;
                 default: return false;
             }
 
@@ -660,34 +718,34 @@ namespace ScavShrapnelMod.Projectiles
             if (Weight == ShrapnelWeight.Micro)
             { HitLimbMicro(limb); return; }
 
-            float armor     = limb.GetArmorReduction();
+            float armor = limb.GetArmorReduction();
             float decayMult = DamageDecayMultiplier;
-            float dmg       = Damage * decayMult / armor;
-            float bleed     = BleedAmount * decayMult / armor;
+            float dmg = Damage * decayMult / armor;
+            float bleed = BleedAmount * decayMult / armor;
 
-            limb.skinHealth   -= dmg * 0.7f;
+            limb.skinHealth -= dmg * 0.7f;
             limb.muscleHealth -= dmg;
-            limb.bleedAmount  += bleed;
+            limb.bleedAmount += bleed;
 
             float armorWear;
             switch (Weight)
             {
-                case ShrapnelWeight.Hot:     armorWear = 0.005f; break;
-                case ShrapnelWeight.Medium:  armorWear = 0.01f;  break;
-                case ShrapnelWeight.Heavy:   armorWear = 0.02f;  break;
-                case ShrapnelWeight.Massive: armorWear = 0.05f;  break;
-                default:                     armorWear = 0.01f;  break;
+                case ShrapnelWeight.Hot: armorWear = 0.005f; break;
+                case ShrapnelWeight.Medium: armorWear = 0.01f; break;
+                case ShrapnelWeight.Heavy: armorWear = 0.02f; break;
+                case ShrapnelWeight.Massive: armorWear = 0.05f; break;
+                default: armorWear = 0.01f; break;
             }
             limb.DamageWearables(armorWear);
 
             float embedChance;
             switch (Weight)
             {
-                case ShrapnelWeight.Hot:     embedChance = 0.15f; break;
-                case ShrapnelWeight.Medium:  embedChance = 0.40f; break;
-                case ShrapnelWeight.Heavy:   embedChance = 0.70f; break;
+                case ShrapnelWeight.Hot: embedChance = 0.15f; break;
+                case ShrapnelWeight.Medium: embedChance = 0.40f; break;
+                case ShrapnelWeight.Heavy: embedChance = 0.70f; break;
                 case ShrapnelWeight.Massive: embedChance = 0.90f; break;
-                default:                     embedChance = 0.30f; break;
+                default: embedChance = 0.30f; break;
             }
             embedChance *= decayMult;
 
@@ -726,7 +784,7 @@ namespace ScavShrapnelMod.Projectiles
                     limb.body.Disfigure();
             }
 
-            limb.body.shock     = Mathf.Max(limb.body.shock, Damage * decayMult * 2f);
+            limb.body.shock = Mathf.Max(limb.body.shock, Damage * decayMult * 2f);
             limb.body.adrenaline = Mathf.Max(limb.body.adrenaline,
                 20f + Damage * decayMult);
             limb.body.DoGoreSound();
@@ -753,14 +811,14 @@ namespace ScavShrapnelMod.Projectiles
 
         private void HitLimbMicro(Limb limb)
         {
-            float armor     = limb.GetArmorReduction();
+            float armor = limb.GetArmorReduction();
             float decayMult = DamageDecayMultiplier;
 
             float dmg = _rng.Range(
                 ShrapnelConfig.MicroDamageMin.Value,
                 ShrapnelConfig.MicroDamageMax.Value) * decayMult / armor;
 
-            limb.skinHealth  -= dmg;
+            limb.skinHealth -= dmg;
             limb.bleedAmount += _rng.Range(
                 ShrapnelConfig.MicroBleedMin.Value,
                 ShrapnelConfig.MicroBleedMax.Value) * decayMult / armor;
@@ -851,12 +909,27 @@ namespace ScavShrapnelMod.Projectiles
             }
         }
 
-        //  TRIGGER (stepping on debris)
+        //  TRIGGER (stepping on debris — players only)
+        //
+        //  BUG FIX: Previously called BreakShard() for ANY non-Body contact,
+        //  including other flying shrapnel. During explosions with 50+ shrapnel,
+        //  flying fragments pass through debris trigger volumes constantly,
+        //  causing chain destruction. From logs: 87 of 92 shards were destroyed
+        //  this way. Client mirrors vanished mid-flight because the server
+        //  destroyed them before any REST state transition could be sent.
+        //
+        //  NOW: Only reacts to Body (player/npc) contacts. Other shrapnel,
+        //  particles, and miscellaneous colliders are silently ignored.
 
         private void OnTriggerEnter2D(Collider2D other)
         {
             if (state != State.Debris && state != State.Stuck) return;
-            if (!other.TryGetComponent(out Body body)) { BreakShard(); return; }
+
+            // WHY: return instead of BreakShard() for non-Body contacts.
+            // Previously: if (!TryGetComponent(out Body body)) { BreakShard(); return; }
+            // This destroyed debris when other shrapnel flew through it.
+            if (!other.TryGetComponent(out Body body)) return;
+
             if (state != State.Debris) return;
             if (_submerged) return;
 
@@ -879,10 +952,10 @@ namespace ScavShrapnelMod.Projectiles
             float armor = target.GetArmorReduction();
             float decay = DamageDecayMultiplier;
 
-            target.skinHealth   -= _rng.Range(15f, 35f) * decay / armor;
-            target.muscleHealth -= _rng.Range(5f, 15f)  * decay / armor;
-            target.bleedAmount  += _rng.Range(3f, 12f)  * decay / armor;
-            target.pain         += 50f * decay / armor;
+            target.skinHealth -= _rng.Range(15f, 35f) * decay / armor;
+            target.muscleHealth -= _rng.Range(5f, 15f) * decay / armor;
+            target.bleedAmount += _rng.Range(3f, 12f) * decay / armor;
+            target.pain += 50f * decay / armor;
             target.shrapnel++;
             target.DamageWearables(0.01f);
 

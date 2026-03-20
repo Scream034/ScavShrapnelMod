@@ -93,7 +93,7 @@ namespace ScavShrapnelMod.Logic
                     (int)(hit.point.x * 10000f) * 397 ^
                     (int)(hit.point.y * 10000f) ^
                     frame);
-                System.Random rng = new System.Random(seed);
+                System.Random rng = new(seed);
 
                 // Spawn physical shrapnel fragments
                 if (ShrapnelConfig.EnableBulletFragments.Value)
@@ -146,7 +146,7 @@ namespace ScavShrapnelMod.Logic
 
             ShrapnelFactory.EnsureWoundSprites();
 
-            GameObject obj = new GameObject($"BulletShr_{index}");
+            GameObject obj = new($"BulletShr_{index}");
             obj.transform.position = hitPoint + rng.InsideUnitCircle() * 0.1f;
             obj.layer = 0;
 

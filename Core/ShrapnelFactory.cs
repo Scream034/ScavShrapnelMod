@@ -129,7 +129,7 @@ namespace ScavShrapnelMod.Core
                 : (ShrapnelVisuals.LitMaterial ?? ShrapnelVisuals.UnlitMaterial);
             if (mat == null) return null;
 
-            GameObject obj = new GameObject($"Shr_{type}_{index}");
+            GameObject obj = new($"Shr_{type}_{index}");
             obj.transform.position =
                 epicenter + rng.InsideUnitCircle() * 0.3f;
             obj.layer = 0;
@@ -251,15 +251,15 @@ namespace ScavShrapnelMod.Core
 
         private static float GetSpeedMultiplier(ShrapnelWeight weight, System.Random rng)
         {
-            switch (weight)
+            return weight switch
             {
-                case ShrapnelWeight.Micro: return rng.Range(1.5f, 2.5f);
-                case ShrapnelWeight.Hot: return rng.Range(0.8f, 1.3f);
-                case ShrapnelWeight.Medium: return rng.Range(0.8f, 1.2f);
-                case ShrapnelWeight.Heavy: return rng.Range(0.4f, 0.8f);
-                case ShrapnelWeight.Massive: return rng.Range(0.2f, 0.4f);
-                default: return 1f;
-            }
+                ShrapnelWeight.Micro => rng.Range(1.5f, 2.5f),
+                ShrapnelWeight.Hot => rng.Range(0.8f, 1.3f),
+                ShrapnelWeight.Medium => rng.Range(0.8f, 1.2f),
+                ShrapnelWeight.Heavy => rng.Range(0.4f, 0.8f),
+                ShrapnelWeight.Massive => rng.Range(0.2f, 0.4f),
+                _ => 1f,
+            };
         }
 
         //  VISUAL SHRAPNEL — spark shower (ParticlePool)
@@ -316,7 +316,7 @@ namespace ScavShrapnelMod.Core
                 float angle = rng.NextAngle();
                 float radialSpeed = rng.Range(0.5f, 3f);
                 float upSpeed = rng.Range(0.5f, 4f);
-                Vector2 velocity = new Vector2(
+                Vector2 velocity = new(
                     Mathf.Cos(angle) * radialSpeed,
                     Mathf.Sin(angle) * Mathf.Abs(radialSpeed) * 0.5f + upSpeed);
 
@@ -388,29 +388,24 @@ namespace ScavShrapnelMod.Core
         private static MaterialProps GetMaterialProperties(
             ShrapnelProjectile.ShrapnelType type)
         {
-            switch (type)
+            return type switch
             {
-                case ShrapnelProjectile.ShrapnelType.Metal:
-                case ShrapnelProjectile.ShrapnelType.HeavyMetal:
-                    return new MaterialProps(0.3f, 1.4f);
-                case ShrapnelProjectile.ShrapnelType.Wood:
-                    return new MaterialProps(0.7f, 0.6f);
-                case ShrapnelProjectile.ShrapnelType.Stone:
-                    return new MaterialProps(0.5f, 1f);
-                default:
-                    return new MaterialProps(0.5f, 1f);
-            }
+                ShrapnelProjectile.ShrapnelType.Metal or ShrapnelProjectile.ShrapnelType.HeavyMetal => new MaterialProps(0.3f, 1.4f),
+                ShrapnelProjectile.ShrapnelType.Wood => new MaterialProps(0.7f, 0.6f),
+                ShrapnelProjectile.ShrapnelType.Stone => new MaterialProps(0.5f, 1f),
+                _ => new MaterialProps(0.5f, 1f),
+            };
         }
 
         private static ShrapnelWeight GetChildWeight(ShrapnelWeight parent)
         {
-            switch (parent)
+            return parent switch
             {
-                case ShrapnelWeight.Massive: return ShrapnelWeight.Heavy;
-                case ShrapnelWeight.Heavy: return ShrapnelWeight.Medium;
-                case ShrapnelWeight.Medium: return ShrapnelWeight.Hot;
-                default: return ShrapnelWeight.Micro;
-            }
+                ShrapnelWeight.Massive => ShrapnelWeight.Heavy,
+                ShrapnelWeight.Heavy => ShrapnelWeight.Medium,
+                ShrapnelWeight.Medium => ShrapnelWeight.Hot,
+                _ => ShrapnelWeight.Micro,
+            };
         }
 
         private static void SpawnBreakFragment(Vector2 position, Vector2 impactNormal,
@@ -418,7 +413,7 @@ namespace ScavShrapnelMod.Core
             ShrapnelWeight weight, float impactSpeed, int index,
             System.Random rng, Material mat, MaterialProps matProps)
         {
-            GameObject obj = new GameObject($"ShrBrk_{index}");
+            GameObject obj = new($"ShrBrk_{index}");
             float childScale = Mathf.Max(parentScale * rng.Range(0.4f, 0.6f), 0.05f);
 
             obj.transform.position =
@@ -471,28 +466,28 @@ namespace ScavShrapnelMod.Core
 
         internal static float ScaleForWeight(ShrapnelWeight w, System.Random rng)
         {
-            switch (w)
+            return w switch
             {
-                case ShrapnelWeight.Micro: return rng.Range(0.02f, 0.05f);
-                case ShrapnelWeight.Hot: return rng.Range(0.08f, 0.14f);
-                case ShrapnelWeight.Medium: return rng.Range(0.14f, 0.25f);
-                case ShrapnelWeight.Heavy: return rng.Range(0.22f, 0.45f);
-                case ShrapnelWeight.Massive: return rng.Range(0.5f, 0.8f);
-                default: return 0.18f;
-            }
+                ShrapnelWeight.Micro => rng.Range(0.02f, 0.05f),
+                ShrapnelWeight.Hot => rng.Range(0.08f, 0.14f),
+                ShrapnelWeight.Medium => rng.Range(0.14f, 0.25f),
+                ShrapnelWeight.Heavy => rng.Range(0.22f, 0.45f),
+                ShrapnelWeight.Massive => rng.Range(0.5f, 0.8f),
+                _ => 0.18f,
+            };
         }
 
         internal static float HeatForWeight(ShrapnelWeight w)
         {
-            switch (w)
+            return w switch
             {
-                case ShrapnelWeight.Micro: return 1.0f;
-                case ShrapnelWeight.Hot: return 1.0f;
-                case ShrapnelWeight.Medium: return 0.4f;
-                case ShrapnelWeight.Heavy: return 0.15f;
-                case ShrapnelWeight.Massive: return 0.08f;
-                default: return 0f;
-            }
+                ShrapnelWeight.Micro => 1.0f,
+                ShrapnelWeight.Hot => 1.0f,
+                ShrapnelWeight.Medium => 0.4f,
+                ShrapnelWeight.Heavy => 0.15f,
+                ShrapnelWeight.Massive => 0.08f,
+                _ => 0f,
+            };
         }
 
         internal static void SetDamage(ShrapnelProjectile proj,

@@ -348,9 +348,9 @@ namespace ScavShrapnelMod.Effects
         {
             Vector2 position = pos + rng.InsideUnitCircle() * 0.4f;
             float scale = rng.Range(ChunkScaleMin, ChunkScaleMax) * (0.6f + energy * 0.8f);
-            Color color = new Color(blockColor.r, blockColor.g, blockColor.b, ChunkAlpha);
+            Color color = new(blockColor.r, blockColor.g, blockColor.b, ChunkAlpha);
 
-            Vector2 tangent = new Vector2(-normal.y, normal.x);
+            Vector2 tangent = new(-normal.y, normal.x);
             Vector2 velocity = normal * rng.Range(ChunkSpeedMin, ChunkSpeedMax) * energy
                              + tangent * rng.Range(-2f, 2f);
 
@@ -372,7 +372,7 @@ namespace ScavShrapnelMod.Effects
             Color dustColor = Color.Lerp(blockColor, new Color(0.55f, 0.53f, 0.50f), 0.35f);
             dustColor.a = DustAlpha;
 
-            Vector2 tangent = new Vector2(-normal.y, normal.x);
+            Vector2 tangent = new(-normal.y, normal.x);
             Vector2 velocity = normal * rng.Range(DustSpeedMin, DustSpeedMax) * energy
                              + tangent * rng.Range(-1.5f, 1.5f);
 
@@ -390,10 +390,10 @@ namespace ScavShrapnelMod.Effects
         {
             Vector2 position = pos + rng.InsideUnitCircle() * 0.2f;
             float scale = rng.Range(StreakScaleMin, StreakScaleMax);
-            Color color = new Color(blockColor.r * 0.75f, blockColor.g * 0.75f,
+            Color color = new(blockColor.r * 0.75f, blockColor.g * 0.75f,
                 blockColor.b * 0.75f, StreakAlpha);
 
-            Vector2 tangent = new Vector2(-normal.y, normal.x);
+            Vector2 tangent = new(-normal.y, normal.x);
             Vector2 dir = (normal + tangent * rng.Range(-0.4f, 0.4f)).normalized;
             float speed = rng.Range(StreakSpeedMin, StreakSpeedMax) * energy;
 
@@ -419,9 +419,9 @@ namespace ScavShrapnelMod.Effects
                 float scale = rng.Range(AirwaveScaleMin, AirwaveScaleMax) * (0.5f + energy * 0.5f);
 
                 float g = rng.Range(0.45f, 0.6f);
-                Color color = new Color(g, g * 0.97f, g * 0.94f, AirwaveAlpha * energy);
+                Color color = new(g, g * 0.97f, g * 0.94f, AirwaveAlpha * energy);
 
-                Vector2 velocity = new Vector2(
+                Vector2 velocity = new(
                     dirSign * rng.Range(AirwaveSpeedMin, AirwaveSpeedMax) * energy,
                     rng.Range(-0.5f, 1.5f));
 

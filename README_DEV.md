@@ -1,6 +1,6 @@
 # ScavShrapnelMod — Build & Usage Guide
 
-> **BUILD.md version:** `0.8.3`
+> **BUILD.md version:** `0.8.4`
 
 ## Table of Contents
 
@@ -281,7 +281,7 @@ Destroys all active physics shrapnel and clears particle pools.
 Brief performance overview.
 
 ```
-v0.8.3 | Phys:42 Lit:1200/6000 Unlit:300/2500 Spark:50 | Total: 1592 | MP:HOST | NET:SERVER tracked=42
+v0.8.4 | Phys:42 Lit:1200/6000 Unlit:300/2500 Spark:50 | Total: 1592 | MP:HOST | NET:SERVER tracked=42
 ```
 
 ### `shrapnel_net`

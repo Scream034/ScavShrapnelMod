@@ -2,6 +2,49 @@
 
 All notable changes to the Shrapnel Overhaul Mod will be documented here.
 
+## [0.8.4] — 2026-03-20
+### Changed
+- **Architecture: Client-side physics shrapnel replaces lightweight mirrors.**
+  Clients now create real `ShrapnelProjectile` instances with `Rigidbody2D` and
+  `CircleCollider2D` — identical physics to the server. Shards bounce off walls,
+  ricochet off metal, and embed in terrain naturally via Unity's physics engine.
+  All damage paths are gated by `IsServerAuthoritative` flag.
+- **Protocol v4: `MSG_SNAPSHOT` removed entirely.** Server no longer sends position
+  updates 10 times per second for every flying shard. Bandwidth reduced by ~50-70
+  packets per explosion. Only 3 message types remain: `MSG_SPAWN`, `MSG_STATE`,
+  `MSG_DESTROY`.
+- **`ClientMirrorShrapnel` deleted.** The entire 600-line mirror system (local
+  gravity simulation, snapshot correction, interpolation, camera LOD, landing blend)
+  is replaced by the same `ShrapnelProjectile` component used on the server. Client
+  shards run the identical FSM (Flying → Stuck/Debris) with damage gated off.
+- **Server REST corrections.** When a server shard transitions to rest, `MSG_STATE`
+  sends the authoritative final position and rotation. Client shard snaps to the
+  server's resting position via `ForceToState`, correcting any drift from divergent
+  physics (different collision timing, block destruction order).
+### Added
+- **`ShrapnelProjectile.IsServerAuthoritative` field.** Controls whether the shard
+  deals damage, breaks blocks, embeds in limbs, spawns break fragments, and plays
+  impact sounds. `true` on server/singleplayer, `false` on client.
+- **`ShrapnelProjectile.ForceToState(ExternalState, Vector2)` method.** Allows
+  network sync to force internal FSM state without collision logic. Handles
+  Rigidbody/trail/heat/collider cleanup identically to organic state transitions.
+- **`ShrapnelProjectile.BeginClientFadeOut()` method.** 150ms shrink+fade for
+  flying client shards on `MSG_DESTROY`. At-rest shards destroy instantly.
+- **`ShrapnelProjectile.CurrentState` property.** Exposes FSM state (0=Flying,
+  1=Stuck, 2=Debris) for network sync diagnostics and REST correction logic.
+### Fixed
+- **Fixed shrapnel clipping through walls on clients.** Previously, lightweight
+  mirrors had no collider and flew straight through terrain during the 100ms between
+  server snapshots. Client shards now have real `CircleCollider2D` with identical
+  `PhysicsMaterial2D` (bounciness=0.15, friction=0.6) and bounce naturally.
+- **Fixed missing ricochets on clients.** Mirrors could not ricochet because they
+  had no physics. Client shards now ricochet off metallic surfaces identically to
+  server shards (same `Rigidbody2D` config, same `PhysicsMaterial2D`).
+- **Fixed client shards not settling into terrain.** Mirrors floated in mid-air
+  until a server snapshot corrected them. Client shards now transition to
+  Stuck/Debris locally via the same velocity/lifetime thresholds as the server,
+  with server `MSG_STATE` correcting final position.
+
 ## [0.8.3] — 2026-03-20
 ### Fixed
 - **Fixed invisible shrapnel damage:** Shards that had visually decayed to near-invisible

@@ -173,8 +173,7 @@ namespace ScavShrapnelMod.Helpers
                 ? (_emissionId = Shader.PropertyToID("_EmissionColor"))
                 : _emissionId;
 
-        private static MaterialPropertyBlock MPB =>
-            _mpb ?? (_mpb = new MaterialPropertyBlock());
+        private static MaterialPropertyBlock MPB => _mpb ??= new MaterialPropertyBlock();
 
         //  SPARK RENDERING CONFIGURATIONS
 

@@ -34,12 +34,18 @@ namespace ScavShrapnelMod.Core
         private readonly int _capacity;
 
         private readonly Transform _container;
-        private readonly Material _material;
         private readonly string _name;
+
+        // WHY: Mutable — HealMaterial() must update this when shader is corrupted.
+        // Readonly _material prevented heal from propagating to new Get() calls.
+        private Material _material;
 
         public int ActiveCount => _activeCount;
         public int FreeCount => _freeTop;
         public int Capacity => _capacity;
+
+        /// <summary>Current material assigned to this pool. May be updated by HealMaterial().</summary>
+        public Material PoolMaterial => _material;
 
         /// <summary>
         /// Creates pool and pre-warms all GameObjects.
@@ -87,9 +93,6 @@ namespace ScavShrapnelMod.Core
 
             return p;
         }
-
-        /// <summary>Material assigned to all particles in this pool.</summary>
-        public Material PoolMaterial => _material;
 
         /// <summary>
         /// Gets a particle. O(1).
@@ -203,17 +206,42 @@ namespace ScavShrapnelMod.Core
 
         /// <summary>
         /// Self-heals material if shader was unloaded by vanilla chunk destruction.
-        /// Call periodically (e.g. every 60 frames from manager).
+        /// Updates pool's own material reference AND all particle SpriteRenderers.
+        /// 
+        /// WHY: Vanilla world chunk unloading can destroy shader references on
+        /// materials created via Shader.Find(). The material object stays alive
+        /// but its shader becomes null, causing invisible particles.
+        /// 
+        /// Called every 60 frames from SparkPoolUpdater.LateUpdate().
         /// </summary>
+        /// <param name="freshMaterial">Newly-fetched material from ShrapnelVisuals (re-validates shader).</param>
         public void HealMaterial(Material freshMaterial)
         {
-            if (_material != null && _material.shader == null && freshMaterial != null)
+            if (freshMaterial == null) return;
+
+            // WHY: Check both pool material AND fresh material shader validity.
+            // If pool material shader is null but fresh one is valid = heal needed.
+            bool poolCorrupted = _material == null
+                || _material.shader == null
+                || !_material.shader.isSupported;
+
+            if (!poolCorrupted) return;
+
+            // Verify fresh material is actually valid
+            if (freshMaterial.shader == null || !freshMaterial.shader.isSupported) return;
+
+            Console.Log($"[AshPool:{_name}] Healing corrupted material" +
+                $" (old shader: {(_material?.shader?.name ?? "NULL")}" +
+                $" → new: {freshMaterial.shader.name})");
+
+            // WHY: Update pool reference so future Get() calls use valid material
+            _material = freshMaterial;
+
+            // Update all existing particle SpriteRenderers
+            for (int i = 0; i < _capacity; i++)
             {
-                for (int i = 0; i < _capacity; i++)
-                {
-                    if (_all[i].SR != null)
-                        _all[i].SR.sharedMaterial = freshMaterial;
-                }
+                if (_all[i] != null && _all[i].SR != null)
+                    _all[i].SR.sharedMaterial = freshMaterial;
             }
         }
     }

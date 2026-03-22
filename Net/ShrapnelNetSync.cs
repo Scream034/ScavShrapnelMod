@@ -247,12 +247,11 @@ namespace ScavShrapnelMod.Net
         /// Matches server ShrapnelFactory.PhysMat exactly:
         /// bounciness=0.15, friction=0.6.
         /// </summary>
-        private static PhysicsMaterial2D ClientPhysMat =>
-            _clientPhysMat ?? (_clientPhysMat = new PhysicsMaterial2D("ClientShrMat")
-            {
-                bounciness = 0.15f,
-                friction = 0.6f
-            });
+        private static PhysicsMaterial2D ClientPhysMat => _clientPhysMat ??= new PhysicsMaterial2D("ClientShrMat")
+        {
+            bounciness = 0.15f,
+            friction = 0.6f
+        };
 
         //  LIFECYCLE
 
@@ -1182,12 +1181,8 @@ namespace ScavShrapnelMod.Net
         //  CLIENT: REAL PHYSICS SHARD CREATION
 
         /// <summary>
-        /// Creates a real physics ShrapnelProjectile on the client.
-        /// Identical to server ShrapnelFactory.SpawnCore but with:
-        ///   IsServerAuthoritative = false (all damage paths gated)
-        ///   No DebrisTracker registration (server manages lifecycle)
-        ///   No ShrapnelNetSync.ServerRegister (client doesn't register)
-        ///   Collider is solid from creation (no physics delay)
+        /// Creates a client-side physics shard by delegating to ShrapnelFactory.
+        /// Eliminates code duplication between NetSync and Factory.
         /// </summary>
         private ShrapnelProjectile CreateClientShard(
             ushort netId, Vector2 position,
@@ -1195,113 +1190,14 @@ namespace ScavShrapnelMod.Net
             float heat, ShrapnelVisuals.TriangleShape shape, float scale,
             bool hasTrail, bool atRest, Vector2 velocity, float rotationZ)
         {
-            Sprite sprite = ShrapnelVisuals.GetTriangleSprite(shape);
-            if (sprite == null) return null;
+            // WHY: Delegate to ShrapnelFactory.SpawnClientShard which maintains
+            // the single source of truth for shard creation.
+            // Previous version duplicated 60+ lines of setup code.
+            var shard = ShrapnelFactory.SpawnClientShard(
+                netId, position, type, weight, heat, shape, scale,
+                hasTrail, atRest, velocity, rotationZ);
 
-            Material mat = heat > ShrapnelVisuals.HotThreshold
-                ? ShrapnelVisuals.UnlitMaterial
-                : (ShrapnelVisuals.LitMaterial ?? ShrapnelVisuals.UnlitMaterial);
-            if (mat == null) return null;
-
-            var obj = new GameObject($"ShrClient_{netId}");
-            obj.transform.position = position;
-            obj.transform.localScale = Vector3.one * scale;
-            obj.transform.rotation = Quaternion.Euler(0f, 0f, rotationZ);
-            obj.layer = 0;
-
-            // Sprite renderer
-            var sr = obj.AddComponent<SpriteRenderer>();
-            sr.sprite = sprite;
-            sr.sortingOrder = 10;
-            sr.sharedMaterial = mat;
-            sr.color = Color.Lerp(
-                ShrapnelVisuals.GetColdColor(type),
-                ShrapnelVisuals.GetHotColor(), heat);
-
-            if (heat > 0.3f)
-                ParticleHelper.ApplyEmission(sr,
-                    ShrapnelVisuals.GetHotColor() * heat * 1.3f);
-
-            // Rigidbody2D — identical to server config
-            var rb = obj.AddComponent<Rigidbody2D>();
-            rb.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
-            rb.sharedMaterial = ClientPhysMat;
-            ShrapnelFactory.ConfigureRigidbody(rb, weight);
-
-            // Collider — solid from creation (no physics delay like server)
-            var col = obj.AddComponent<CircleCollider2D>();
-            col.radius = weight == ShrapnelWeight.Massive ? 0.5f : 0.3f;
-            col.sharedMaterial = ClientPhysMat;
-            col.enabled = true;
-
-            // ShrapnelProjectile — same component, damage gated
-            var proj = obj.AddComponent<ShrapnelProjectile>();
-            proj.IsServerAuthoritative = false;
-            proj.NetSyncId = netId;
-            proj.Type = type;
-            proj.Weight = weight;
-            proj.Heat = heat;
-            proj.CanBreak = false;
-            proj.HasTrail = false;
-            proj.Seed = unchecked((int)netId * 397 + 42);
-
-            if (atRest)
-            {
-                rb.velocity = Vector2.zero;
-                rb.isKinematic = true;
-
-                // WHY: Use ForceToState instead of BecomeStuck to avoid
-                // block position lookup which may fail during world loading.
-                proj.ForceToState(ShrapnelProjectile.ExternalState.Stuck, position);
-            }
-            else
-            {
-                rb.velocity = velocity;
-                rb.AddTorque(
-                    new System.Random(unchecked((int)netId * 17)).Range(-500f, 500f));
-            }
-
-            // Trail — visual only, matches server ShrapnelFactory.ConfigureTrail
-            if (hasTrail && !atRest)
-            {
-                Material trailMat = ShrapnelVisuals.TrailMaterial;
-                if (trailMat != null)
-                {
-                    var tr = obj.AddComponent<TrailRenderer>();
-                    tr.sharedMaterial = trailMat;
-                    tr.sortingOrder = 9;
-                    tr.numCapVertices = 1;
-                    tr.autodestruct = false;
-                    tr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-                    tr.receiveShadows = false;
-                    tr.endWidth = 0f;
-
-                    switch (weight)
-                    {
-                        case ShrapnelWeight.Massive:
-                            tr.time = 0.4f;
-                            tr.startWidth = 0.12f * scale * 5f;
-                            tr.startColor = new Color(0.3f, 0.25f, 0.2f, 0.8f);
-                            tr.endColor = new Color(0.2f, 0.2f, 0.2f, 0f);
-                            break;
-                        case ShrapnelWeight.Hot:
-                            tr.time = 0.25f;
-                            tr.startWidth = 0.06f * scale * 10f;
-                            tr.startColor = new Color(1f, 0.5f, 0.1f, 0.9f);
-                            tr.endColor = new Color(1f, 0.2f, 0f, 0f);
-                            break;
-                        default:
-                            tr.time = 0.15f;
-                            tr.startWidth = 0.04f * scale * 10f;
-                            tr.startColor = new Color(0.6f, 0.6f, 0.6f, 0.6f);
-                            tr.endColor = new Color(0.4f, 0.4f, 0.4f, 0f);
-                            break;
-                    }
-                    proj.HasTrail = true;
-                }
-            }
-
-            return proj;
+            return shard;
         }
 
         //  CLIENT: SHARD LIFECYCLE

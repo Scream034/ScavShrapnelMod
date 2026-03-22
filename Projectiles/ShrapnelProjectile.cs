@@ -2,18 +2,22 @@
 using UnityEngine;
 using ScavShrapnelMod.Helpers;
 using ScavShrapnelMod.Core;
+using ScavShrapnelMod.Logic;
 
 namespace ScavShrapnelMod.Projectiles
 {
     /// <summary>
     /// Main shrapnel component. FSM: Flying → Stuck / Debris.
     ///
+    /// REFACTORED:
+    ///   • Damage logic extracted to ShrapnelDamage (static, pure functions)
+    ///   • Weight data from ShrapnelWeightData table (no switch duplication)
+    ///   • Trail config from TrailConfig (shared with client shards)
+    ///   • Break params from ShrapnelDamage.GetBreakParams
+    ///
     /// MULTIPLAYER:
     ///   Server: IsServerAuthoritative=true (default). Full damage, block breaking, net sync.
     ///   Client: IsServerAuthoritative=false. Real physics for bouncing, all damage gated.
-    ///           State transitions happen locally for visuals; server MSG_STATE corrects
-    ///           final rest position. Server MSG_DESTROY handles cleanup.
-    ///   Singleplayer: IsServerAuthoritative=true, NetSyncId=0.
     /// </summary>
     public sealed class ShrapnelProjectile : MonoBehaviour
     {
@@ -22,7 +26,6 @@ namespace ScavShrapnelMod.Projectiles
 
         /// <summary>
         /// External state enum for net sync. Maps to internal State.
-        /// Avoids exposing private enum while allowing ForceToState calls.
         /// </summary>
         public enum ExternalState { Flying = 0, Stuck = 1, Debris = 2 }
 
@@ -40,13 +43,9 @@ namespace ScavShrapnelMod.Projectiles
         private const float MinFlyTimeBeforeDebris = 0.3f;
         private const float MinBlockImpactSpeed = 3f;
         private const float SparkImpactSpeed = 9f;
-
         private const float HeatCoolRate = ShrapnelVisuals.HeatCoolRate;
         private const float HotThreshold = ShrapnelVisuals.HotThreshold;
         private const float OutlineScaleMultiplier = ShrapnelVisuals.OutlineScale;
-        private const float OutlineAlphaBase = ShrapnelVisuals.OutlineAlphaBase;
-
-        /// <summary>Duration of client-side fade-out for flying shards on MSG_DESTROY.</summary>
         private const float ClientFadeDuration = 0.15f;
 
         //  PUBLIC FIELDS
@@ -58,31 +57,9 @@ namespace ScavShrapnelMod.Projectiles
         public float Heat = 1f;
         public bool HasTrail;
         public bool CanBreak = true;
-
-        /// <summary>
-        /// Deterministic seed for per-projectile RNG.
-        /// Set by ShrapnelFactory from the explosion's RNG chain.
-        /// </summary>
         public int Seed;
-
-        /// <summary>
-        /// Network sync ID assigned by ShrapnelNetSync.ServerRegister.
-        /// 0 = singleplayer (no sync).
-        /// </summary>
         [NonSerialized] public ushort NetSyncId;
-
-        /// <summary>
-        /// True = full server behavior (damage, world modification, sound, net sync).
-        /// False = client shard (real physics for visuals, all damage/state gated).
-        /// WHY: Client shards need real Rigidbody2D for wall bouncing but must not
-        /// deal damage, break blocks, embed in limbs, or send net sync messages.
-        /// </summary>
         [NonSerialized] public bool IsServerAuthoritative = true;
-
-        /// <summary>
-        /// Access to current FSM state for net sync.
-        /// 0=Flying, 1=Stuck, 2=Debris.
-        /// </summary>
         public int CurrentState => (int)state;
 
         //  PRIVATE FIELDS
@@ -127,8 +104,7 @@ namespace ScavShrapnelMod.Projectiles
             get
             {
                 if (state == State.Stuck)
-                    return 1f - Mathf.Clamp01(
-                        stuckTimer / ShrapnelConfig.StuckLifetime.Value);
+                    return 1f - Mathf.Clamp01(stuckTimer / ShrapnelConfig.StuckLifetime.Value);
                 if (state == State.Debris)
                     return 1f - Mathf.Clamp01(debrisTimer / debrisLifetime);
                 return 1f;
@@ -154,7 +130,6 @@ namespace ScavShrapnelMod.Projectiles
             trail = GetComponent<TrailRenderer>();
             _col = GetComponent<Collider2D>();
             _transform = transform;
-
             frameSlot = Mathf.Abs(GetInstanceID()) % 10;
         }
 
@@ -169,47 +144,13 @@ namespace ScavShrapnelMod.Projectiles
         {
             if (sr == null) return;
 
-            // Self-heal corrupted material
-            if (sr.sharedMaterial != null && sr.sharedMaterial.shader == null)
-            {
-                sr.sharedMaterial = Heat > HotThreshold
-                    ? ShrapnelVisuals.UnlitMaterial
-                    : (ShrapnelVisuals.LitMaterial ?? ShrapnelVisuals.UnlitMaterial);
+            // PERF: Stagger material self-heal check every 60 frames
+            if (Time.frameCount % 60 == frameSlot % 60)
+                TryHealMaterials();
 
-                if (Heat > 0.01f) UpdateEmission();
-            }
-
-            if (trail != null
-                && trail.sharedMaterial != null
-                && trail.sharedMaterial.shader == null)
-            {
-                trail.sharedMaterial = ShrapnelVisuals.TrailMaterial;
-            }
-
-            // Client fade-out takes priority
             if (_clientFading)
             {
-                _clientFadeTimer += Time.deltaTime;
-                float t = Mathf.Clamp01(_clientFadeTimer / ClientFadeDuration);
-
-                float fadeScale = 1f - t;
-                _transform.localScale = _clientFadeScale * Mathf.Max(fadeScale, 0.01f);
-                if (sr != null)
-                {
-                    Color c = sr.color;
-                    c.a *= 1f - t;
-                    sr.color = c;
-                }
-
-                // Continue physics during fade for smooth visual
-                // Rigidbody2D handles movement automatically
-
-                if (t >= 1f)
-                {
-                    if (!IsServerAuthoritative && NetSyncId != 0)
-                        Net.ShrapnelNetSync.NotifyClientShardDestroyed(NetSyncId);
-                    Destroy(gameObject);
-                }
+                UpdateClientFade();
                 return;
             }
 
@@ -226,20 +167,52 @@ namespace ScavShrapnelMod.Projectiles
         {
             if (sr != null && lastEmissionHeat > 0f)
                 ParticleHelper.ClearEmission(sr);
-
             if (IsServerAuthoritative && NetSyncId != 0)
                 Net.ShrapnelNetSync.ServerUnregister(NetSyncId);
-
             if (!IsServerAuthoritative && NetSyncId != 0)
                 Net.ShrapnelNetSync.NotifyClientShardDestroyed(NetSyncId);
+        }
+
+        //  MATERIAL SELF-HEAL (staggered)
+
+        private void TryHealMaterials()
+        {
+            if (sr.sharedMaterial != null && sr.sharedMaterial.shader == null)
+            {
+                sr.sharedMaterial = ShrapnelFactory.SelectMaterial(Heat);
+                if (Heat > 0.01f) UpdateEmission();
+            }
+            if (trail != null && trail.sharedMaterial != null && trail.sharedMaterial.shader == null)
+                trail.sharedMaterial = ShrapnelVisuals.TrailMaterial;
+        }
+
+        //  CLIENT FADE
+
+        private void UpdateClientFade()
+        {
+            _clientFadeTimer += Time.deltaTime;
+            float t = Mathf.Clamp01(_clientFadeTimer / ClientFadeDuration);
+
+            _transform.localScale = _clientFadeScale * Mathf.Max(1f - t, 0.01f);
+            if (sr != null)
+            {
+                Color c = sr.color;
+                c.a *= 1f - t;
+                sr.color = c;
+            }
+
+            if (t >= 1f)
+            {
+                if (!IsServerAuthoritative && NetSyncId != 0)
+                    Net.ShrapnelNetSync.NotifyClientShardDestroyed(NetSyncId);
+                Destroy(gameObject);
+            }
         }
 
         //  FSM UPDATES
 
         private void UpdateFlying(int frame)
         {
-            // WHY: Physics delay only on server. Client shards have colliders
-            // enabled from creation for immediate wall bouncing.
             if (IsServerAuthoritative && _physicsDelay > 0f)
             {
                 _physicsDelay -= Time.deltaTime;
@@ -296,29 +269,17 @@ namespace ScavShrapnelMod.Projectiles
 
         //  VISUAL DECAY
 
-        /// <summary>
-        /// Applies scale and alpha decay during the final 30% of shard lifetime.
-        /// Returns true if the shard was destroyed (caller must return immediately).
-        /// Disables collider before shard becomes invisible to prevent phantom damage.
-        /// </summary>
         private bool ApplyVisualDecay()
         {
             float t = NormalizedLifetime;
             if (t > 0.3f) return false;
 
-            // WHY: Shard is visually depleted — destroy to prevent invisible collider
-            // dealing damage or blocking physics.
             if (t <= 0.02f)
-            {
-                Destroy(gameObject);
-                return true;
-            }
+            { Destroy(gameObject); return true; }
 
             float decayT = t / 0.3f;
             float decayFactor = decayT * decayT * (3f - 2f * decayT);
 
-            // WHY: Disable collider before shard is fully invisible to prevent
-            // damage from nearly-invisible fragments.
             if (decayFactor < 0.15f && _col != null && _col.enabled)
                 _col.enabled = false;
 
@@ -350,6 +311,11 @@ namespace ScavShrapnelMod.Projectiles
             _outlineSr.sharedMaterial = ShrapnelVisuals.UnlitMaterial;
             _outlineSr.sortingOrder = sr.sortingOrder - 1;
             _outlineSr.color = ShrapnelVisuals.GetOutlineBaseColor();
+
+            // WHY: Subtle glow emission makes debris visible in dark caves.
+            // Without this, fragments blend into dark ground tiles.
+            ParticleHelper.ApplyEmission(_outlineSr,
+                new Color(0.4f, 0.05f, 0.02f));
         }
 
         private void DestroyOutline()
@@ -365,15 +331,10 @@ namespace ScavShrapnelMod.Projectiles
         private void PulseOutline()
         {
             if (_outlineSr == null) return;
-
-            if (_outlineSr.sharedMaterial != null
-                && _outlineSr.sharedMaterial.shader == null)
+            if (_outlineSr.sharedMaterial != null && _outlineSr.sharedMaterial.shader == null)
                 _outlineSr.sharedMaterial = ShrapnelVisuals.UnlitMaterial;
-
             if (_submerged) { DestroyOutline(); _outlineApplied = false; return; }
-
-            _outlineSr.color = ShrapnelVisuals.GetOutlineColor(
-                Time.time, frameSlot * 0.628f);
+            _outlineSr.color = ShrapnelVisuals.GetOutlineColor(Time.time, frameSlot * 0.628f);
         }
 
         //  ENVIRONMENT CHECKS
@@ -416,15 +377,8 @@ namespace ScavShrapnelMod.Projectiles
             _originalScale = _transform.localScale;
             rb.isKinematic = false;
 
-            switch (Weight)
-            {
-                case ShrapnelWeight.Micro: rb.gravityScale = 0.1f; break;
-                case ShrapnelWeight.Hot: rb.gravityScale = 0.3f; break;
-                case ShrapnelWeight.Medium: rb.gravityScale = 0.15f; break;
-                case ShrapnelWeight.Heavy: rb.gravityScale = 0.35f; break;
-                case ShrapnelWeight.Massive: rb.gravityScale = 0.5f; break;
-                default: rb.gravityScale = 0.5f; break;
-            }
+            // WHY: Use weight data table instead of switch
+            rb.gravityScale = ShrapnelWeightData.Get(Weight).GravityScale;
 
             if (_col != null) _col.isTrigger = false;
             DestroyOutline();
@@ -436,8 +390,6 @@ namespace ScavShrapnelMod.Projectiles
         {
             if (state == State.Debris || state == State.Stuck)
             {
-                // WHY: Only server breaks debris from high-velocity non-shrapnel impacts.
-                // Client shards ignore all debris/stuck collisions.
                 if (IsServerAuthoritative
                     && collision.relativeVelocity.magnitude > 5f
                     && !collision.collider.TryGetComponent<ShrapnelProjectile>(out _))
@@ -445,11 +397,6 @@ namespace ScavShrapnelMod.Projectiles
                 return;
             }
             if (state != State.Flying) return;
-
-            // WHY: All damage, block breaking, and state transitions from collision
-            // are server-only. Client shards bounce via physics engine naturally —
-            // Unity handles the reflection, no code needed. Server MSG_STATE
-            // corrects final resting position.
             if (!IsServerAuthoritative) return;
 
             if (collision.collider.TryGetComponent(out Limb limb))
@@ -474,40 +421,7 @@ namespace ScavShrapnelMod.Projectiles
 
         private void HitBuildingEntity(BuildingEntity entity)
         {
-            try
-            {
-                if (entity.cantHit) { BecomeDebris(); return; }
-
-                float decayMult = DamageDecayMultiplier;
-                float dmg = Damage * decayMult;
-                entity.health -= dmg;
-
-                if (entity.animal)
-                {
-                    entity.gameObject.SendMessage("AnimalHit", dmg,
-                        SendMessageOptions.DontRequireReceiver);
-                    if (entity.health <= 0f)
-                        entity.gameObject.SendMessage("AnimalDeath",
-                            SendMessageOptions.DontRequireReceiver);
-                }
-
-                try
-                {
-                    SpriteRenderer entitySr = entity.GetComponent<SpriteRenderer>();
-                    if (entitySr != null && entitySr.sprite != null)
-                        WorldGeneration.world.CreateHitFlash(
-                            entitySr.sprite, entity.transform.position,
-                            entity.transform.rotation, Color.red, entity.transform);
-                }
-                catch (Exception e)
-                {
-                    Console.Error($"[Shrapnel] HitFlash: {e.Message}");
-                }
-            }
-            catch (Exception e)
-            {
-                Console.Error($"[Shrapnel] BuildingEntity: {e.Message}");
-            }
+            ShrapnelDamage.ApplyToBuildingEntity(entity, Damage, DamageDecayMultiplier);
             Destroy(gameObject);
         }
 
@@ -572,6 +486,9 @@ namespace ScavShrapnelMod.Projectiles
             Vector2 hitPoint = collision.GetContact(0).point;
             Vector2 hitNormal = collision.GetContact(0).normal;
 
+            // Spawn material-appropriate debris on every block hit
+            SpawnBlockImpactDebris(hitPoint, hitNormal, impactSpeed);
+
             if (TryRicochet(impactSpeed, hitPoint, hitNormal)) return;
             if (CanBreak && TryBreak(impactSpeed, hitPoint, hitNormal)) return;
 
@@ -586,14 +503,12 @@ namespace ScavShrapnelMod.Projectiles
                 if (info == null) { BecomeDebris(); return; }
 
                 float kineticDamage = impactSpeed * rb.mass * 10f;
-                if (kineticDamage > info.health
-                    && _blocksDestroyed < MaxBlocksToDestroy)
+                if (kineticDamage > info.health && _blocksDestroyed < MaxBlocksToDestroy)
                 {
                     if (ShrapnelFactory.TryDamageSlot())
                     {
                         WorldGeneration.world.DamageBlock(
-                            hitPoint - hitNormal * 0.1f,
-                            kineticDamage, true, false);
+                            hitPoint - hitNormal * 0.1f, kineticDamage, true, false);
                         _blocksDestroyed++;
                     }
                     rb.velocity = -hitNormal * impactSpeed * 0.4f;
@@ -612,6 +527,96 @@ namespace ScavShrapnelMod.Projectiles
                 rb.velocity *= 0.4f;
             }
             catch { BecomeDebris(); }
+        }
+
+        /// <summary>
+        /// Spawns material-appropriate debris particles on shrapnel→block collision.
+        /// Metal = few sparks. Soft blocks = more dust/chunks.
+        /// Uses BlockClassifier for consistent material detection.
+        /// </summary>
+        private void SpawnBlockImpactDebris(Vector2 hitPoint, Vector2 hitNormal,
+            float impactSpeed)
+        {
+            if (!AshParticlePoolManager.EnsureReady()) return;
+            if (impactSpeed < 3f) return;
+
+            BlockInfo info = null;
+            try
+            {
+                Vector2Int blockPos = WorldGeneration.world.WorldToBlockPos(
+                    hitPoint - hitNormal * 0.1f);
+                ushort blockId = WorldGeneration.world.GetBlock(blockPos);
+                if (blockId != 0)
+                    info = WorldGeneration.world.GetBlockInfo(blockId);
+            }
+            catch { /* Out of bounds */ }
+
+            MaterialCategory cat = BlockClassifier.Classify(info);
+            float dustMult = BlockClassifier.GetDustMultiplier(cat);
+            bool isMetal = cat == MaterialCategory.Metal || (info != null && info.metallic);
+
+            // KISS: energyScale 0-1 based on speed
+            float energy = Mathf.Clamp01(impactSpeed / 25f);
+            float softBonus = isMetal ? 0.5f : dustMult;
+
+            int chunkCount = Mathf.Clamp(Mathf.RoundToInt(2 * softBonus * energy), 1, 5);
+            int dustCount = Mathf.Clamp(Mathf.RoundToInt(3 * softBonus * energy), 1, 8);
+
+            for (int i = 0; i < chunkCount; i++)
+            {
+                Vector2 pos = hitPoint + _rng.InsideUnitCircle() * 0.12f;
+                Color col = BlockClassifier.GetColorWithAlpha(cat, _rng, 0.85f);
+
+                Vector2 tangent = new(-hitNormal.y, hitNormal.x);
+                Vector2 vel = hitNormal * _rng.Range(1.5f, 3.5f) * energy
+                            + tangent * _rng.Range(-1.5f, 1.5f);
+
+                var vis = new VisualParticleParams(
+                    _rng.Range(0.03f, 0.08f), col, 11,
+                    (ShrapnelVisuals.TriangleShape)_rng.Next(0, 6));
+                var phy = AshPhysicsParams.Chunk(vel, _rng.Range(1f, 3f), _rng);
+                ParticleHelper.SpawnLit(pos, vis, phy, _rng.Range(0f, 100f));
+            }
+
+            for (int i = 0; i < dustCount; i++)
+            {
+                Vector2 pos = hitPoint + _rng.InsideUnitCircle() * 0.2f;
+                Color baseCol = BlockClassifier.GetColor(cat, _rng);
+                Color dustCol = Color.Lerp(baseCol, new Color(0.5f, 0.5f, 0.5f), 0.3f);
+                dustCol.a = 0.4f;
+
+                Vector2 tangent = new(-hitNormal.y, hitNormal.x);
+                Vector2 vel = hitNormal * _rng.Range(0.3f, 1.5f) * energy
+                            + tangent * _rng.Range(-0.6f, 0.6f);
+
+                var vis = new VisualParticleParams(
+                    _rng.Range(0.02f, 0.05f), dustCol, 10,
+                    ShrapnelVisuals.TriangleShape.Chunk);
+                var phy = AshPhysicsParams.Dust(vel, _rng.Range(0.6f, 2f), _rng);
+                ParticleHelper.SpawnLit(pos, vis, phy, _rng.Range(0f, 100f));
+            }
+
+            // Metal: bright sparks
+            if (isMetal && impactSpeed > 6f)
+            {
+                int sparkCount = Mathf.Clamp(Mathf.RoundToInt(2 * energy), 1, 4);
+                for (int i = 0; i < sparkCount; i++)
+                {
+                    Vector2 pos = hitPoint + _rng.InsideUnitCircle() * 0.05f;
+                    float heat = _rng.Range(0.6f, 1f);
+                    Color col = new(1f, Mathf.Lerp(0.5f, 0.9f, heat),
+                        Mathf.Lerp(0.1f, 0.4f, heat));
+
+                    var vis = new VisualParticleParams(
+                        _rng.Range(0.01f, 0.025f), col, 13,
+                        ShrapnelVisuals.TriangleShape.Needle);
+                    float angle = _rng.Range(-55f, 55f) * Mathf.Deg2Rad;
+                    Vector2 dir = MathHelper.RotateDirection(hitNormal, angle);
+                    var spark = new SparkParams(dir,
+                        _rng.Range(4f, 10f) * energy, _rng.Range(0.05f, 0.12f));
+                    ParticleHelper.SpawnSpark(pos, vis, spark);
+                }
+            }
         }
 
         //  RICOCHET / BREAK
@@ -633,8 +638,7 @@ namespace ScavShrapnelMod.Projectiles
             }
             catch { return false; }
 
-            float dot = Mathf.Abs(
-                Vector2.Dot(rb.velocity.normalized, hitNormal));
+            float dot = Mathf.Abs(Vector2.Dot(rb.velocity.normalized, hitNormal));
             if (Mathf.Asin(dot) * Mathf.Rad2Deg > RicochetMaxAngleDeg) return false;
 
             rb.velocity = Vector2.Reflect(rb.velocity, hitNormal) * RicochetSpeedRetention;
@@ -647,25 +651,17 @@ namespace ScavShrapnelMod.Projectiles
         {
             if (Weight == ShrapnelWeight.Micro) return false;
 
-            float breakThreshold, breakChance;
-            switch (Weight)
-            {
-                case ShrapnelWeight.Massive: breakThreshold = 8f; breakChance = 0.6f; break;
-                case ShrapnelWeight.Heavy: breakThreshold = 15f; breakChance = 0.35f; break;
-                case ShrapnelWeight.Medium: breakThreshold = 20f; breakChance = 0.2f; break;
-                default: return false;
-            }
+            if (!ShrapnelDamage.GetBreakParams(Weight, out float breakThreshold, out float breakChance))
+                return false;
 
             if (impactSpeed < breakThreshold) return false;
-            if (DeterministicRoll() > breakChance) return false;
+            if ((float)_rng.NextDouble() > breakChance) return false;
 
             ShrapnelFactory.SpawnBreakFragments(
                 hitPoint, hitNormal, _transform.localScale.x, Type, Weight, impactSpeed);
             BreakShard();
             return true;
         }
-
-        private float DeterministicRoll() => (float)_rng.NextDouble();
 
         //  SPARKS
 
@@ -687,21 +683,17 @@ namespace ScavShrapnelMod.Projectiles
             {
                 Vector2 sp = pos + _rng.InsideUnitCircle() * 0.1f;
                 float cv = _rng.NextFloat();
-                Color sc = new Color(
-                    1f,
-                    Mathf.Lerp(0.5f, 0.95f, cv),
-                    Mathf.Lerp(0.1f, 0.5f, cv));
+                Color sc = new(1f, Mathf.Lerp(0.5f, 0.95f, cv), Mathf.Lerp(0.1f, 0.5f, cv));
 
                 var vis = new VisualParticleParams(_rng.Range(0.02f, 0.06f), sc, 11,
                     ShrapnelVisuals.TriangleShape.Needle);
-                var em = new EmissionParams(
-                    new Color(3f, Mathf.Lerp(1.5f, 2.5f, cv), 0.5f));
                 float spread = _rng.Range(-60f, 60f) * Mathf.Deg2Rad;
                 Vector2 sd = MathHelper.RotateDirection(baseDir, spread);
                 var spark = new SparkParams(sd, _rng.Range(3f, 10f),
                     _rng.Range(0.08f, 0.25f));
 
-                ParticleHelper.SpawnSparkUnlit("Spark", sp, vis, spark, em);
+                ParticleHelper.SpawnSparkUnlit("Spark", sp, vis, spark,
+                    new EmissionParams(new Color(3f, Mathf.Lerp(1.5f, 2.5f, cv), 0.5f)));
             }
 
             if (isRicochet) SpawnRicochetDebris(pos, normal);
@@ -733,146 +725,26 @@ namespace ScavShrapnelMod.Projectiles
             }
         }
 
-        //  LIMB HIT
+        //  LIMB HIT — delegates to ShrapnelDamage
 
         private void HitLimb(Limb limb)
         {
             if (limb.dismembered) { Destroy(gameObject); return; }
 
             if (Weight == ShrapnelWeight.Micro)
-            { HitLimbMicro(limb); return; }
-
-            float armor = limb.GetArmorReduction();
-            float decayMult = DamageDecayMultiplier;
-            float dmg = Damage * decayMult / armor;
-            float bleed = BleedAmount * decayMult / armor;
-
-            limb.skinHealth -= dmg * 0.7f;
-            limb.muscleHealth -= dmg;
-            limb.bleedAmount += bleed;
-
-            float armorWear;
-            switch (Weight)
             {
-                case ShrapnelWeight.Hot: armorWear = 0.005f; break;
-                case ShrapnelWeight.Medium: armorWear = 0.01f; break;
-                case ShrapnelWeight.Heavy: armorWear = 0.02f; break;
-                case ShrapnelWeight.Massive: armorWear = 0.05f; break;
-                default: armorWear = 0.01f; break;
-            }
-            limb.DamageWearables(armorWear);
-
-            float embedChance;
-            switch (Weight)
-            {
-                case ShrapnelWeight.Hot: embedChance = 0.15f; break;
-                case ShrapnelWeight.Medium: embedChance = 0.40f; break;
-                case ShrapnelWeight.Heavy: embedChance = 0.70f; break;
-                case ShrapnelWeight.Massive: embedChance = 0.90f; break;
-                default: embedChance = 0.30f; break;
-            }
-            embedChance *= decayMult;
-
-            if (DeterministicRoll() < embedChance / (armor * armor)
-                && DeterministicRoll() > 0.2f)
-                limb.shrapnel++;
-
-            if (Weight == ShrapnelWeight.Massive)
-            {
-                limb.BreakBone();
-            }
-            else if (Weight == ShrapnelWeight.Heavy)
-            {
-                float bc = Type == ShrapnelType.HeavyMetal ? 0.15f : 0.08f;
-                if (DeterministicRoll() < bc / armor)
-                    limb.BreakBone();
+                ShrapnelDamage.ApplyMicroToLimb(limb, DamageDecayMultiplier, _rng);
+                Destroy(gameObject);
+                return;
             }
 
-            if (limb.isVital && Weight != ShrapnelWeight.Hot)
-            {
-                float ic = Weight == ShrapnelWeight.Massive ? 0.6f
-                    : (Weight == ShrapnelWeight.Heavy ? 0.3f : 0.15f);
-                ic *= decayMult;
-                if (DeterministicRoll() < ic / armor)
-                    limb.body.internalBleeding += dmg * 0.3f;
-            }
+            ShrapnelDamage.ApplyToLimb(
+                limb, Weight, Type, Damage, BleedAmount,
+                DamageDecayMultiplier, _rng,
+                state == State.Flying, rb);
 
-            if (limb.isHead)
-            {
-                limb.body.consciousness -= dmg * 2f;
-                if ((Weight == ShrapnelWeight.Heavy || Weight == ShrapnelWeight.Massive)
-                    && DeterministicRoll() < 0.2f * decayMult / armor)
-                    limb.body.brainHealth -= dmg * 0.5f;
-                if (Weight == ShrapnelWeight.Massive
-                    && DeterministicRoll() < 0.3f * decayMult / armor)
-                    limb.body.Disfigure();
-            }
-
-            limb.body.shock = Mathf.Max(limb.body.shock, Damage * decayMult * 2f);
-            limb.body.adrenaline = Mathf.Max(limb.body.adrenaline,
-                20f + Damage * decayMult);
-            limb.body.DoGoreSound();
-            limb.body.talker.Talk(Locale.GetCharacter("loud"), null, false, false);
-
-            float ragdollThresh = state == State.Flying ? 15f : 25f;
-            if (Weight == ShrapnelWeight.Heavy
-                || Weight == ShrapnelWeight.Massive
-                || Damage * decayMult > ragdollThresh)
-            {
-                Vector2 kd = (state == State.Flying
-                    && rb != null && !rb.isKinematic)
-                    ? rb.velocity.normalized
-                    : Vector2.up;
-                limb.body.lastTimeStepVelocity = kd
-                    * (Weight == ShrapnelWeight.Massive ? 10f : 5f)
-                    * decayMult;
-                limb.body.Ragdoll();
-            }
-
-            ApplyWoundVisuals(limb);
+            ShrapnelDamage.ApplyWoundVisuals(limb);
             Destroy(gameObject);
-        }
-
-        private void HitLimbMicro(Limb limb)
-        {
-            float armor = limb.GetArmorReduction();
-            float decayMult = DamageDecayMultiplier;
-
-            float dmg = _rng.Range(
-                ShrapnelConfig.MicroDamageMin.Value,
-                ShrapnelConfig.MicroDamageMax.Value) * decayMult / armor;
-
-            limb.skinHealth -= dmg;
-            limb.bleedAmount += _rng.Range(
-                ShrapnelConfig.MicroBleedMin.Value,
-                ShrapnelConfig.MicroBleedMax.Value) * decayMult / armor;
-
-            limb.DamageWearables(0.001f);
-
-            limb.body.shock = Mathf.Max(limb.body.shock,
-                dmg * ShrapnelConfig.MicroShockMultiplier.Value);
-            limb.body.adrenaline = Mathf.Max(limb.body.adrenaline,
-                ShrapnelConfig.MicroAdrenalineBase.Value + dmg * 0.3f);
-            limb.body.DoGoreSound();
-
-            Destroy(gameObject);
-        }
-
-        private void ApplyWoundVisuals(Limb limb)
-        {
-            try
-            {
-                if (ShrapnelFactory.WoundSprite != null)
-                    limb.CreateTemporarySprite(ShrapnelFactory.WoundSprite,
-                        0f, null, false, 600f, (Limb x) => !x.hasShrapnel);
-                if (ShrapnelFactory.WoundPanel != null)
-                    WoundView.view.AddImageToLimb(limb, ShrapnelFactory.WoundPanel,
-                        false, (Limb x) => !x.hasShrapnel || x.dismembered);
-            }
-            catch (Exception e)
-            {
-                Console.Error($"[Shrapnel] Wound: {e.Message}");
-            }
         }
 
         //  STATE TRANSITIONS
@@ -884,14 +756,8 @@ namespace ScavShrapnelMod.Projectiles
             _outlineApplied = false;
             _originalScale = _transform.localScale;
 
-            if (rb != null && !rb.isKinematic
-                && rb.bodyType != RigidbodyType2D.Static)
-            {
-                rb.velocity = Vector2.zero;
-                rb.angularVelocity = 0f;
-            }
-            rb.isKinematic = true;
-            _transform.position = (Vector2)hitPoint;
+            FreezeRigidbody();  // DEDUPLICATED
+            _transform.position = hitPoint;
 
             if (trail != null) trail.enabled = false;
             ClearHeatAndEmission();
@@ -903,34 +769,28 @@ namespace ScavShrapnelMod.Projectiles
             _outlineApplied = false;
             _originalScale = _transform.localScale;
 
-            if (rb != null && !rb.isKinematic
-                && rb.bodyType != RigidbodyType2D.Static)
-            {
-                rb.velocity = Vector2.zero;
-                rb.angularVelocity = 0f;
-            }
-            rb.isKinematic = true;
+            FreezeRigidbody();
 
             if (trail != null) trail.enabled = false;
             if (_col != null) _col.isTrigger = true;
             ClearHeatAndEmission();
 
             debrisTimer = 0f;
-            switch (Type)
+
+            float baseLifetime = Type switch
             {
-                case ShrapnelType.Metal:
-                    debrisLifetime = ShrapnelConfig.DebrisLifetimeMetal.Value; break;
-                case ShrapnelType.HeavyMetal:
-                    debrisLifetime = ShrapnelConfig.DebrisLifetimeHeavyMetal.Value; break;
-                case ShrapnelType.Stone:
-                    debrisLifetime = ShrapnelConfig.DebrisLifetimeStone.Value; break;
-                case ShrapnelType.Wood:
-                    debrisLifetime = ShrapnelConfig.DebrisLifetimeWood.Value; break;
-                case ShrapnelType.Electronic:
-                    debrisLifetime = ShrapnelConfig.DebrisLifetimeElectronic.Value; break;
-                default:
-                    debrisLifetime = 300f; break;
-            }
+                ShrapnelType.Metal => ShrapnelConfig.DebrisLifetimeMetal.Value,
+                ShrapnelType.HeavyMetal => ShrapnelConfig.DebrisLifetimeHeavyMetal.Value,
+                ShrapnelType.Stone => ShrapnelConfig.DebrisLifetimeStone.Value,
+                ShrapnelType.Wood => ShrapnelConfig.DebrisLifetimeWood.Value,
+                ShrapnelType.Electronic => ShrapnelConfig.DebrisLifetimeElectronic.Value,
+                _ => 300f,
+            };
+
+            // WHY: Micro/Hot fragments vanish fast — too small to persist.
+            // Heavy/Massive stay full duration. Uses lookup table.
+            float weightMult = ShrapnelVisuals.DebrisLifetimeMultiplier[(int)Weight];
+            debrisLifetime = baseLifetime * weightMult;
         }
 
         //  TRIGGER (stepping on debris — server only)
@@ -938,12 +798,8 @@ namespace ScavShrapnelMod.Projectiles
         private void OnTriggerEnter2D(Collider2D other)
         {
             if (state != State.Debris && state != State.Stuck) return;
-
-            // WHY: Client shards don't deal step-on damage.
             if (!IsServerAuthoritative) return;
-
             if (!other.TryGetComponent(out Body body)) return;
-
             if (state != State.Debris) return;
             if (_submerged) return;
 
@@ -964,20 +820,12 @@ namespace ScavShrapnelMod.Projectiles
             if (target == null) { BreakShard(); return; }
 
             float armor = target.GetArmorReduction();
-            float decay = DamageDecayMultiplier;
-
-            target.skinHealth -= _rng.Range(15f, 35f) * decay / armor;
-            target.muscleHealth -= _rng.Range(5f, 15f) * decay / armor;
-            target.bleedAmount += _rng.Range(3f, 12f) * decay / armor;
-            target.pain += 50f * decay / armor;
-            target.shrapnel++;
-            target.DamageWearables(0.01f);
+            ShrapnelDamage.ApplyStepOnDamage(target, DamageDecayMultiplier, armor, _rng);
 
             body.adrenaline = Mathf.Max(body.adrenaline, 40f);
             body.DoGoreSound();
-            body.talker.Talk(
-                Locale.GetCharacter("steponglass"), null, false, false);
-            ApplyWoundVisuals(target);
+            body.talker.Talk(Locale.GetCharacter("steponglass"), null, false, false);
+            ShrapnelDamage.ApplyWoundVisuals(target);
             BreakShard();
         }
 
@@ -1000,14 +848,8 @@ namespace ScavShrapnelMod.Projectiles
 
         private void BreakShard()
         {
-            // WHY: Client shards don't break — server sends MSG_DESTROY.
             if (!IsServerAuthoritative) return;
-
-            try
-            {
-                Sound.Play("glassshard", _transform.position,
-                    false, true, null, 1f, 1f, false, false);
-            }
+            try { Sound.Play("glassshard", _transform.position, false, true, null, 1f, 1f, false, false); }
             catch { }
             Destroy(gameObject);
         }
@@ -1015,15 +857,9 @@ namespace ScavShrapnelMod.Projectiles
         //  PUBLIC API: NET SYNC
 
         /// <summary>
-        /// Forces internal state machine to a specific state without going through
-        /// collision logic. Used by ShrapnelNetSync for client-side REST corrections.
-        ///
-        /// WHY: BecomeStuck requires a valid block position from WorldToBlockPos
-        /// which may fail during world loading. ForceToState sets the state directly
-        /// and handles Rigidbody/trail/heat cleanup identically.
+        /// Forces internal state machine to a specific state.
+        /// Used by ShrapnelNetSync for client-side REST corrections.
         /// </summary>
-        /// <param name="externalState">Target state.</param>
-        /// <param name="position">World position to snap to.</param>
         public void ForceToState(ExternalState externalState, Vector2 position)
         {
             _transform.position = position;
@@ -1035,14 +871,7 @@ namespace ScavShrapnelMod.Projectiles
                     stuckTimer = 0f;
                     _outlineApplied = false;
                     _originalScale = _transform.localScale;
-
-                    if (rb != null && !rb.isKinematic
-                        && rb.bodyType != RigidbodyType2D.Static)
-                    {
-                        rb.velocity = Vector2.zero;
-                        rb.angularVelocity = 0f;
-                    }
-                    if (rb != null) rb.isKinematic = true;
+                    FreezeRigidbody();  // DEDUPLICATED
                     if (trail != null) trail.enabled = false;
                     ClearHeatAndEmission();
                     break;
@@ -1051,18 +880,10 @@ namespace ScavShrapnelMod.Projectiles
                     state = State.Debris;
                     _outlineApplied = false;
                     _originalScale = _transform.localScale;
-
-                    if (rb != null && !rb.isKinematic
-                        && rb.bodyType != RigidbodyType2D.Static)
-                    {
-                        rb.velocity = Vector2.zero;
-                        rb.angularVelocity = 0f;
-                    }
-                    if (rb != null) rb.isKinematic = true;
+                    FreezeRigidbody();  // DEDUPLICATED
                     if (trail != null) trail.enabled = false;
                     if (_col != null) _col.isTrigger = true;
                     ClearHeatAndEmission();
-
                     debrisTimer = 0f;
                     debrisLifetime = Type switch
                     {
@@ -1089,17 +910,13 @@ namespace ScavShrapnelMod.Projectiles
 
         /// <summary>
         /// Begins graceful 150ms shrink+fade for a client flying shard.
-        /// Called by ShrapnelNetSync when MSG_DESTROY arrives for a shard
-        /// still in flight. At-rest/debris shards are destroyed instantly.
         /// </summary>
         public void BeginClientFadeOut()
         {
             if (_clientFading) return;
-
             _clientFading = true;
             _clientFadeTimer = 0f;
             _clientFadeScale = _transform.localScale;
-
             if (trail != null && trail.enabled)
                 trail.enabled = false;
         }
@@ -1111,8 +928,7 @@ namespace ScavShrapnelMod.Projectiles
             if (Heat <= 0f) return;
 
             float cool = HeatCoolRate * dt;
-            if (WorldGeneration.world != null
-                && WorldGeneration.world.ambientTemperature < 5f)
+            if (WorldGeneration.world != null && WorldGeneration.world.ambientTemperature < 5f)
                 cool *= 2f;
 
             Heat = Mathf.Max(Heat - cool, 0f);
@@ -1130,15 +946,13 @@ namespace ScavShrapnelMod.Projectiles
             {
                 try
                 {
-                    Vector2Int wPos = WorldGeneration.world.WorldToBlockPos(
-                        _transform.position);
+                    Vector2Int wPos = WorldGeneration.world.WorldToBlockPos(_transform.position);
                     if (FluidManager.main.WaterInfo(wPos).Item1 > 0f)
                     {
                         cooledInWater = true;
                         _submerged = true;
                         ClearHeatAndEmission();
-                        Sound.Play("fizz", _transform.position,
-                            false, true, null, 1f, 1f, false, false);
+                        Sound.Play("fizz", _transform.position, false, true, null, 1f, 1f, false, false);
                         SpawnSteamPuff();
                     }
                 }
@@ -1184,6 +998,18 @@ namespace ScavShrapnelMod.Projectiles
         {
             ParticleHelper.ClearEmission(sr);
             lastEmissionHeat = 0f;
+        }
+
+        /// <summary>Freezes rigidbody motion. Single source of truth.</summary>
+        private void FreezeRigidbody()
+        {
+            if (rb != null && !rb.isKinematic && rb.bodyType != RigidbodyType2D.Static)
+            {
+                rb.velocity = Vector2.zero;
+                rb.angularVelocity = 0f;
+            }
+            if (rb != null)
+                rb.isKinematic = true;
         }
     }
 }

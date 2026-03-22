@@ -2,6 +2,12 @@
 
 All notable changes to the Shrapnel Overhaul Mod will be documented here.
 
+## [0.8.5] — 2026-03-20
+- **Fixed double-explosions and block flickering on clients:** Turret deaths and
+  bullet impacts were incorrectly triggering shrapnel and vanilla explosions on the
+  client locally, fighting with the server's authoritative sync. Clients now correctly
+  wait for the server and only play visual/audio effects (no local block destruction).
+
 ## [0.8.4] — 2026-03-20
 ### Changed
 - **Architecture: Client-side physics shrapnel replaces lightweight mirrors.**

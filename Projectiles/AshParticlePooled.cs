@@ -6,7 +6,7 @@ namespace ScavShrapnelMod.Projectiles
     /// <summary>
     /// Pooled ash particle with zero-GC lifecycle.
     ///
-    /// Physics model (identical to original AshParticle):
+    /// Physics model:
     ///   - Quadratic air drag (F_drag ∝ v²)
     ///   - Perlin-noise turbulence (frame-staggered, 3-frame interval)
     ///   - Wind drift (increases with age²)
@@ -22,17 +22,21 @@ namespace ScavShrapnelMod.Projectiles
     ///   - Frame-staggered Perlin (every 3 frames, ×3 compensation)
     ///
     /// Lifecycle:
-    ///   Pool.Get() = SetActive(true) = Initialize() = Update = Recycle() = SetActive(false) = Pool
+    ///   Pool.Get() → SetActive(true) → Initialize() → Update → Recycle() → SetActive(false) → Pool
     /// </summary>
     public sealed class AshParticlePooled : MonoBehaviour
     {
-        //  SET ONCE AT POOL CREATION — never changes
+        #region Pool References (set once at creation)
+
         internal AshParticlePool Pool;
         internal SpriteRenderer SR;
         internal Transform CachedTransform;
         internal int PoolIndex;
 
-        //  PHYSICS STATE (flat fields, zero struct copies)
+        #endregion
+
+        #region Physics State (flat fields, zero struct copies)
+
         private float _velX, _velY;
         private float _gravity;
         private float _drag;
@@ -43,18 +47,29 @@ namespace ScavShrapnelMod.Projectiles
         private float _perlinSeedX, _perlinSeedY;
         private float _rotSpeed;
 
-        //  LIFECYCLE
+        #endregion
+
+        #region Lifecycle State
+
         private float _life;
         private float _maxLife;
         private float _startDelay;
         private bool _alive;
 
-        //  COLOR (decomposed — avoids Color struct in hot loop)
+        #endregion
+
+        #region Color State (decomposed — avoids Color struct in hot loop)
+
         private float _baseR, _baseG, _baseB, _baseA;
 
-        //  FRAME STAGGER
+        #endregion
+
+        #region Frame Stagger
+
         private int _frameSlot;
         private const int TurbInterval = 3;
+
+        #endregion
 
         private void Awake()
         {
@@ -65,6 +80,11 @@ namespace ScavShrapnelMod.Projectiles
         /// <summary>
         /// Configures particle for new emission. Zero allocations.
         /// Must be called immediately after Pool.Get() in the same frame.
+        ///
+        /// CRITICAL: Revalidates SR.sharedMaterial against Pool.PoolMaterial
+        /// on every init. Prevents corrupted shader references from vanilla
+        /// chunk unloading causing invisible particles.
+        /// Cost: one reference comparison per emit — negligible vs visual bugs.
         /// </summary>
         public void Initialize(
             Vector2 worldPos, Vector2 velocity, float lifetime, Color color,
@@ -74,10 +94,12 @@ namespace ScavShrapnelMod.Projectiles
             float perlinSeed, float startDelay,
             Sprite sprite, int sortingOrder)
         {
+            // Transform setup
             CachedTransform.position = new Vector3(worldPos.x, worldPos.y, 0f);
             CachedTransform.localScale = new Vector3(scale, scale, 1f);
             CachedTransform.rotation = Quaternion.identity;
 
+            // Physics state
             _velX = velocity.x;
             _velY = velocity.y;
             _gravity = gravity;
@@ -88,22 +110,38 @@ namespace ScavShrapnelMod.Projectiles
             _windY = wind.y;
             _thermalLift = thermalLift;
 
+            // Perlin seeds — deterministic per-particle variation
             _perlinSeedX = perlinSeed * 17.31f;
             _perlinSeedY = perlinSeed * 31.17f;
             _rotSpeed = (perlinSeed % 6.28f - 3.14f) * 60f;
 
+            // Lifecycle
             _life = lifetime;
             _maxLife = lifetime;
             _startDelay = startDelay;
 
+            // Color decomposition (avoids Color struct in Update hot loop)
             _baseR = color.r;
             _baseG = color.g;
             _baseB = color.b;
             _baseA = color.a;
 
+            // WHY: Revalidate material on every Initialize().
+            // Pool.PoolMaterial is updated by HealMaterial() when shader corruption
+            // is detected. Without this check, particles reused from free stack
+            // would still reference the old corrupted material.
+            // PERF: Single reference comparison — branch predicted (almost always equal).
+            if (Pool != null)
+            {
+                Material poolMat = Pool.PoolMaterial;
+                if (poolMat != null && SR.sharedMaterial != poolMat)
+                    SR.sharedMaterial = poolMat;
+            }
+
             SR.sprite = sprite;
             SR.sortingOrder = sortingOrder;
 
+            // Delayed particles start invisible
             if (_startDelay > 0f)
             {
                 SR.enabled = false;
@@ -121,7 +159,7 @@ namespace ScavShrapnelMod.Projectiles
         {
             if (!_alive) return;
 
-            //  Start delay — invisible and motionless
+            // Start delay — invisible and motionless
             if (_startDelay > 0f)
             {
                 _startDelay -= Time.deltaTime;
@@ -133,7 +171,7 @@ namespace ScavShrapnelMod.Projectiles
                 return;
             }
 
-            //  Lifetime
+            // Lifetime check
             _life -= Time.deltaTime;
             if (_life <= 0f)
             {
@@ -142,13 +180,13 @@ namespace ScavShrapnelMod.Projectiles
             }
 
             float dt = Time.deltaTime;
-            float t = _life / _maxLife;     // 1=0
-            float age = 1f - t;              // 0=1
+            float t = _life / _maxLife;     // 1→0 over lifetime
+            float age = 1f - t;              // 0→1 over lifetime
 
-            //  Gravity
+            // Gravity
             _velY -= _gravity * dt;
 
-            //  Quadratic drag
+            // Quadratic drag: F_drag ∝ v², applied as speed reduction
             float speedSqr = _velX * _velX + _velY * _velY;
             if (speedSqr > 0.0001f)
             {
@@ -167,7 +205,7 @@ namespace ScavShrapnelMod.Projectiles
                 }
             }
 
-            //  Wind drift (increases with age²)
+            // Wind drift (increases with age²)
             if (_windX != 0f || _windY != 0f)
             {
                 float windInf = age * age;
@@ -175,13 +213,15 @@ namespace ScavShrapnelMod.Projectiles
                 _velY += _windY * windInf * dt;
             }
 
-            //  Thermal lift (decays with t²)
+            // Thermal lift (decays with t² — strongest at start)
             if (_thermalLift > 0f)
             {
                 _velY += _thermalLift * (t * t) * dt;
             }
 
-            //  Perlin turbulence (frame-staggered)
+            // Perlin turbulence (frame-staggered for performance)
+            // WHY: Computing Perlin every frame is expensive. Staggering across
+            // 3 frames with ×3 compensation gives same visual result at 1/3 cost.
             if (Time.frameCount % TurbInterval == _frameSlot)
             {
                 float time = Time.time * _turbScale;
@@ -189,23 +229,26 @@ namespace ScavShrapnelMod.Projectiles
                 float py = Mathf.PerlinNoise(_perlinSeedX, time + _perlinSeedY) - 0.5f;
                 float turbMult = _turbStrength * 2f * dt * TurbInterval;
                 _velX += px * turbMult;
-                _velY += py * turbMult * 0.5f;
+                _velY += py * turbMult * 0.5f;  // Less vertical turbulence
             }
 
-            //  Position
+            // Position integration
             Vector3 pos = CachedTransform.position;
             pos.x += _velX * dt;
             pos.y += _velY * dt;
             CachedTransform.position = pos;
 
-            //  Rotation
+            // Rotation
             CachedTransform.Rotate(0f, 0f, _rotSpeed * dt);
 
-            //  Alpha fade (smoothstep)
+            // Alpha fade (smoothstep for natural falloff)
             float alpha = t * t * (3f - 2f * t);
             SR.color = new Color(_baseR, _baseG, _baseB, _baseA * alpha);
         }
 
+        /// <summary>
+        /// Returns particle to pool. Called when lifetime expires.
+        /// </summary>
         private void Recycle()
         {
             _alive = false;
@@ -214,12 +257,17 @@ namespace ScavShrapnelMod.Projectiles
             Pool.Return(this);
         }
 
+        /// <summary>
+        /// Force-recycles without returning to pool. Used by pool eviction.
+        /// Pool.StealOldest() handles the actual return.
+        /// </summary>
         internal void ForceRecycle()
         {
             _alive = false;
             SR.enabled = false;
         }
 
+        /// <summary>Whether this particle is currently active.</summary>
         internal bool IsAlive => _alive;
     }
 }

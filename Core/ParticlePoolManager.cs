@@ -7,8 +7,9 @@ namespace ScavShrapnelMod.Core
     /// Manages ONLY the Spark pool (Unity ParticleSystem).
     /// Debris/Glow handled by AshParticlePoolManager.
     ///
-    /// CRITICAL: Update() must be called every frame to keep
-    /// ParticleSystem near camera (prevents frustum culling).
+    /// CRITICAL: SparkPoolUpdater.LateUpdate() runs every frame for:
+    ///   1. ParticleSystem camera follow (frustum culling prevention)
+    ///   2. Periodic material heal for AshParticle pools (every 60 frames)
     /// </summary>
     public static class ParticlePoolManager
     {
@@ -45,7 +46,7 @@ namespace ScavShrapnelMod.Core
                 _sparkPool = new ParticlePool("Spark", additiveMat, sparkMax, 14);
                 ConfigureSparkPool(_sparkPool.System);
 
-                // Create updater MonoBehaviour for FollowCamera
+                // Create updater MonoBehaviour for FollowCamera + material heal
                 _updater = new GameObject("SparkPoolUpdater");
                 UnityEngine.Object.DontDestroyOnLoad(_updater);
                 _updater.hideFlags = HideFlags.HideAndDontSave;
@@ -83,6 +84,19 @@ namespace ScavShrapnelMod.Core
         internal static void Update()
         {
             _sparkPool?.FollowCamera();
+        }
+
+        /// <summary>
+        /// Periodic material heal for ALL particle pools.
+        /// Called every 60 frames from SparkPoolUpdater.
+        /// 
+        /// WHY HERE: SparkPoolUpdater is the only guaranteed-running MonoBehaviour
+        /// in the mod. AshParticlePoolManager is static with no Update loop.
+        /// Piggyback on existing per-frame callback to avoid another MonoBehaviour.
+        /// </summary>
+        internal static void HealAllMaterials()
+        {
+            AshParticlePoolManager.HealMaterials();
         }
 
         private static void ConfigureSparkPool(ParticleSystem ps)
@@ -133,14 +147,23 @@ namespace ScavShrapnelMod.Core
     }
 
     /// <summary>
-    /// MonoBehaviour that calls ParticlePoolManager.Update() every frame.
-    /// Ensures ParticleSystem follows camera for proper rendering.
+    /// MonoBehaviour that calls ParticlePoolManager.Update() every frame
+    /// and triggers periodic material heal for all particle pools.
     /// </summary>
     internal sealed class SparkPoolUpdater : MonoBehaviour
     {
+        // PERF: Stagger heal check to avoid per-frame overhead.
+        // 60 frames ≈ 1 second at 60fps — fast enough to catch corruption
+        // before player notices invisible particles.
+        private const int HealInterval = 60;
+
         private void LateUpdate()
         {
             ParticlePoolManager.Update();
+
+            // PERF: Staggered material heal — once per second
+            if (Time.frameCount % HealInterval == 0)
+                ParticlePoolManager.HealAllMaterials();
         }
     }
 }

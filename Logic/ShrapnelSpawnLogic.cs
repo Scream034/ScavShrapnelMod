@@ -35,9 +35,7 @@ namespace ScavShrapnelMod.Logic
     /// </summary>
     public static class ShrapnelSpawnLogic
     {
-        // ───────────────────────────────────────────────────
         //  THROTTLING & DEBOUNCE
-        // ───────────────────────────────────────────────────
 
         private static Vector2 _lastSpawnPos = new(float.MinValue, float.MinValue);
         private static int _lastSpawnFrame = -999;
@@ -45,7 +43,6 @@ namespace ScavShrapnelMod.Logic
         /// <summary>Global maximum particle/shrapnel speed clamp.</summary>
         public static float GlobalMaxSpeed => ShrapnelConfig.GlobalMaxSpeed.Value;
 
-        // ───────────────────────────────────────────────────
         //  FRACTION CONSTANTS — control particle budget distribution
         //
         //  Total shrapnel count allocated as:
@@ -53,7 +50,6 @@ namespace ScavShrapnelMod.Logic
         //    MicroFraction:       visual-only spark shower, no physics GO (+20% from 0.10)
         //    PyrotechnicFraction: diverse spark types needle/medium/glob (+20% from 0.15)
         //    Remainder:           random weight physics shrapnel
-        // ───────────────────────────────────────────────────
 
         private const int AngularSectors = 8;
         private const float HotFraction = 0.25f;
@@ -73,9 +69,7 @@ namespace ScavShrapnelMod.Logic
         /// </summary>
         private const float MinExplosionRange = 0.1f;
 
-        // ───────────────────────────────────────────────────
         //  EXPLOSION PROFILE ENUM
-        // ───────────────────────────────────────────────────
 
         public enum ExplosionProfile { Mine, Dynamite, Turret, Gravbag, Unknown }
 
@@ -104,9 +98,7 @@ namespace ScavShrapnelMod.Logic
             }
         }
 
-        // ───────────────────────────────────────────────────
         //  SEED GENERATION (multiplayer-safe)
-        // ───────────────────────────────────────────────────
 
         /// <summary>
         /// Generates deterministic seed from world position.
@@ -126,9 +118,7 @@ namespace ScavShrapnelMod.Logic
         /// <summary>Generates per-shrapnel seed from explosion's RNG chain.</summary>
         internal static int MakeShrapnelSeed(System.Random rng) => rng.Next();
 
-        // ───────────────────────────────────────────────────
         //  THROTTLE CONTROL
-        // ───────────────────────────────────────────────────
 
         private static bool TryRegisterSpawn(Vector2 pos)
         {
@@ -148,21 +138,21 @@ namespace ScavShrapnelMod.Logic
             _lastSpawnFrame = -999;
         }
 
-        // ───────────────────────────────────────────────────
         //  PRE-EXPLOSION PHASE (before block destruction)
-        // ───────────────────────────────────────────────────
 
         /// <summary>
         /// Spawns physics shrapnel, sparks, ash, smoke, and biome effects.
         /// Runs BEFORE CreateExplosion destroys blocks.
         ///
-        /// Filters gravbag ghost explosions (range ≤ 0.1) to avoid lethal
-        /// internal bleeding from shrapnel spawned inside player torso.
+        /// PERF FIX: Console.Log gated behind DebugLogging to avoid
+        /// string interpolation allocation on every explosion.
         /// </summary>
         public static void PreExplosion(ExplosionParams param)
         {
-            Console.Log($"PRE-Explosion: range={param.range:F1}" +
-                $" dmg={param.structuralDamage:F1} vel={param.velocity:F1}");
+            // PERF: Only allocate log string when debug logging is enabled
+            if (ShrapnelConfig.DebugLogging.Value)
+                Console.Log($"PRE-Explosion: range={param.range:F1}" +
+                    $" dmg={param.structuralDamage:F1} vel={param.velocity:F1}");
 
             try
             {
@@ -201,14 +191,9 @@ namespace ScavShrapnelMod.Logic
                 int randomCount = Mathf.Max(0, count - hotCount - pyroCount - microCount);
 
                 int totalSpawned = 0;
-
-                // MULTIPLAYER: Check if we should spawn physics shrapnel.
-                // Clients in multiplayer should NOT spawn physics GameObjects —
-                // only the server/host is authoritative over physics.
-                // Visual effects (sparks, ash, debris particles) are always spawned.
                 bool spawnPhysics = MultiplayerHelper.ShouldSpawnPhysicsShrapnel;
 
-                // Phase 1: Hot shrapnel (physics GameObjects) — server only in MP
+                // Phase 1: Hot shrapnel
                 if (spawnPhysics)
                 {
                     try
@@ -220,11 +205,10 @@ namespace ScavShrapnelMod.Logic
                 }
                 else
                 {
-                    // Client: advance RNG to keep determinism, but don't spawn
                     AdvanceRng(rng, hotCount);
                 }
 
-                // Phase 2: Micro sparks (visual-only, always spawn)
+                // Phase 2: Micro sparks
                 try
                 {
                     totalSpawned += SpawnMicroShrapnel(param.position, speed, type, rng,
@@ -232,7 +216,7 @@ namespace ScavShrapnelMod.Logic
                 }
                 catch (Exception e) { Console.Error($"Micro: {e.Message}"); }
 
-                // Phase 3: Diverse sparks (visual, always spawn)
+                // Phase 3: Diverse sparks
                 try
                 {
                     totalSpawned += SpawnDiverseSparks(param.position, speed, type, rng,
@@ -240,7 +224,7 @@ namespace ScavShrapnelMod.Logic
                 }
                 catch (Exception e) { Console.Error($"Sparks: {e.Message}"); }
 
-                // Phase 4: Random weight shrapnel (physics) — server only in MP
+                // Phase 4: Random weight shrapnel
                 if (spawnPhysics)
                 {
                     try
@@ -255,18 +239,18 @@ namespace ScavShrapnelMod.Logic
                     AdvanceRng(rng, randomCount);
                 }
 
-                // Phase 5: Secondary shrapnel (physics) — server only in MP
+                // Phase 5: Secondary shrapnel
                 if (spawnPhysics)
                 {
                     try { totalSpawned += SpawnSecondaryFromBlocks(param, rng, type, speed); }
                     catch (Exception e) { Console.Error($"Secondary: {e.Message}"); }
                 }
 
-                // Phase 6: Block debris particles (visual, always spawn)
+                // Phase 6: Block debris particles
                 try { SpawnBlockDebris(param, rng); }
                 catch (Exception e) { Console.Error($"BlockDebris: {e.Message}"); }
 
-                // Phase 7: Ash cloud (visual, always spawn)
+                // Phase 7: Ash cloud
                 try
                 {
                     int ashCount = Mathf.Max(1, Mathf.RoundToInt(GetAshCount(type, rng) * spawnMult));
@@ -274,11 +258,11 @@ namespace ScavShrapnelMod.Logic
                 }
                 catch (Exception e) { Console.Error($"Ash: {e.Message}"); }
 
-                // Phase 8: Biome effects (visual, always spawn)
+                // Phase 8: Biome effects
                 try { SpawnBiomeEffects(param.position, param.range, ambientTemp, rng, spawnMult); }
                 catch (Exception e) { Console.Error($"Biome: {e.Message}"); }
 
-                // Phase 9: Advanced effects (visual, always spawn)
+                // Phase 9: Advanced effects
                 try
                 {
                     ExplosionEffectsLogic.SpawnAllEffects(param.position, param.range,
@@ -312,9 +296,7 @@ namespace ScavShrapnelMod.Logic
                 rng.Next();
         }
 
-        // ───────────────────────────────────────────────────
         //  POST-EXPLOSION PHASE (after block destruction)
-        // ───────────────────────────────────────────────────
 
         /// <summary>
         /// Spawns ground debris from newly-exposed crater surfaces.
@@ -356,9 +338,7 @@ namespace ScavShrapnelMod.Logic
             }
         }
 
-        // ───────────────────────────────────────────────────
         //  FULL WRAPPER (console command path)
-        // ───────────────────────────────────────────────────
 
         /// <summary>
         /// Combined wrapper for console commands where we control full sequence.
@@ -372,9 +352,7 @@ namespace ScavShrapnelMod.Logic
             PostExplosion(param, preScan: false);
         }
 
-        // ───────────────────────────────────────────────────
         //  CLASSIFICATION (detect explosion type)
-        // ───────────────────────────────────────────────────
 
         /// <summary>
         /// Classifies explosion by matching known parameter patterns.
@@ -394,24 +372,23 @@ namespace ScavShrapnelMod.Logic
         ///   disfigureChance value (0.15 vs standard 0.34) and spawn mostly
         ///   micro sparks with very few electronic fragments.
         /// </summary>
-        private static void ClassifyExplosion(ExplosionParams p, System.Random rng,
+       private static void ClassifyExplosion(ExplosionParams p, System.Random rng,
             out ShrapnelProjectile.ShrapnelType type, out int count,
             out float speed, out ExplosionProfile profile)
         {
             float eps = ShrapnelConfig.ClassifyEpsilon.Value;
             float speedBoost = ShrapnelConfig.GlobalSpeedBoost.Value;
 
-            // Dynamite: full bomb specs
+            // Dynamite: blunt rock debris, not sharp metal
             if (Mathf.Abs(p.range - ShrapnelConfig.DynamiteRange.Value) < eps &&
                 Mathf.Abs(p.structuralDamage - ShrapnelConfig.DynamiteStructuralDamage.Value) < eps)
             {
                 profile = ExplosionProfile.Dynamite;
-                type = ShrapnelProjectile.ShrapnelType.Stone;
+                type = ShrapnelProjectile.ShrapnelType.Stone; // WHY: Rock debris, reduced bleed
                 count = rng.Range(ShrapnelConfig.DynamitePrimaryMin.Value,
                                   ShrapnelConfig.DynamitePrimaryMax.Value);
                 speed = ShrapnelConfig.DynamiteSpeed.Value * speedBoost;
             }
-            // Turret: small controlled burst
             else if (Mathf.Abs(p.range - ShrapnelConfig.TurretRange.Value) < eps &&
                      Mathf.Abs(p.velocity - ShrapnelConfig.TurretVelocity.Value) < eps)
             {
@@ -421,17 +398,15 @@ namespace ScavShrapnelMod.Logic
                                   ShrapnelConfig.TurretPrimaryMax.Value);
                 speed = ShrapnelConfig.TurretSpeed.Value * speedBoost;
             }
-            // GRAVBAG: battery overload pop, NOT a real bomb
             else if (Mathf.Abs(p.disfigureChance - 0.15f) < 0.02f &&
                      Mathf.Abs(p.range - 12f) < eps &&
                      Mathf.Abs(p.structuralDamage - 500f) < eps)
             {
                 profile = ExplosionProfile.Gravbag;
                 type = ShrapnelProjectile.ShrapnelType.Electronic;
-                count = rng.Range(3, 6);     // Very few physics fragments
-                speed = 15f * speedBoost;     // Slow — pop not explosion
+                count = rng.Range(3, 6);
+                speed = 15f * speedBoost;
             }
-            // Standard mine pattern
             else if (IsKnownMine(p))
             {
                 profile = ExplosionProfile.Mine;
@@ -440,7 +415,6 @@ namespace ScavShrapnelMod.Logic
                                   ShrapnelConfig.MinePrimaryMax.Value);
                 speed = ShrapnelConfig.MineSpeed.Value * speedBoost;
             }
-            // Adaptive unknown fallback
             else
             {
                 profile = ExplosionProfile.Unknown;
@@ -448,17 +422,10 @@ namespace ScavShrapnelMod.Logic
                 float adaptive = Mathf.Sqrt(p.structuralDamage) * Mathf.Sqrt(p.range);
                 count = Mathf.Clamp(Mathf.RoundToInt(adaptive * 0.08f), 5, 100);
                 speed = Mathf.Clamp(adaptive * 0.15f, 20f, 80f) * speedBoost;
-
-                if (ShrapnelConfig.DebugLogging.Value)
-                    Console.Log($"Unknown explosion: range={p.range}" +
-                        $" dmg={p.structuralDamage} vel={p.velocity}" +
-                        $" adaptive={adaptive:F1} count={count}");
             }
         }
 
-        // ───────────────────────────────────────────────────
         //  ENVIRONMENT HELPERS
-        // ───────────────────────────────────────────────────
 
         /// <summary>
         /// Gets current ambient temperature from world state.
@@ -497,9 +464,7 @@ namespace ScavShrapnelMod.Logic
             return false;
         }
 
-        // ───────────────────────────────────────────────────
         //  SPARK DIVERSITY (3 sub-types with different characteristics)
-        // ───────────────────────────────────────────────────
 
         /// <summary>
         /// Spawns diverse spark types with physical properties:
@@ -583,9 +548,7 @@ namespace ScavShrapnelMod.Logic
             return spawned;
         }
 
-        // ───────────────────────────────────────────────────
         //  MICRO SHRAPNEL SPAWNING
-        // ───────────────────────────────────────────────────
 
         private static int SpawnMicroShrapnel(Vector2 epicenter, float speed,
             ShrapnelProjectile.ShrapnelType type, System.Random rng,
@@ -604,9 +567,7 @@ namespace ScavShrapnelMod.Logic
             return spawned;
         }
 
-        // ───────────────────────────────────────────────────
         //  STRATIFIED HOT SHRAPNEL (sector coverage guarantee)
-        // ───────────────────────────────────────────────────
 
         private static int SpawnHotShrapnel(Vector2 epicenter, float speed,
             ShrapnelProjectile.ShrapnelType type, System.Random rng,
@@ -642,9 +603,7 @@ namespace ScavShrapnelMod.Logic
             return spawned;
         }
 
-        // ───────────────────────────────────────────────────
         //  RANDOM WEIGHT SHRAPNEL
-        // ───────────────────────────────────────────────────
 
         private static int SpawnRandomWeight(Vector2 epicenter, float speed,
             ShrapnelProjectile.ShrapnelType type, System.Random rng,
@@ -664,9 +623,7 @@ namespace ScavShrapnelMod.Logic
             return spawned;
         }
 
-        // ───────────────────────────────────────────────────
         //  SECTOR HELPERS (blocked bottom cone for mines)
-        // ───────────────────────────────────────────────────
 
         private static bool IsSectorBlocked(int sector, bool bottomBlocked)
         {
@@ -691,9 +648,7 @@ namespace ScavShrapnelMod.Logic
             return 0;
         }
 
-        // ───────────────────────────────────────────────────
         //  WEIGHT ROLLING (probability distribution)
-        // ───────────────────────────────────────────────────
 
         private static ShrapnelWeight RollRandomWeight(
             ShrapnelProjectile.ShrapnelType type, System.Random rng)
@@ -713,9 +668,7 @@ namespace ScavShrapnelMod.Logic
             return weight;
         }
 
-        // ───────────────────────────────────────────────────
         //  ASH COUNT BY TYPE
-        // ───────────────────────────────────────────────────
 
         private static int GetAshCount(ShrapnelProjectile.ShrapnelType type, System.Random rng)
         {
@@ -727,9 +680,7 @@ namespace ScavShrapnelMod.Logic
             };
         }
 
-        // ───────────────────────────────────────────────────
         //  BLOCK DEBRIS SPAWNING (nearby affected blocks)
-        // ───────────────────────────────────────────────────
 
         private static int SpawnBlockDebris(ExplosionParams param, System.Random rng)
         {
@@ -792,9 +743,7 @@ namespace ScavShrapnelMod.Logic
             ParticleHelper.SpawnLit(pos, vis, phy, rng.Range(0f, 100f));
         }
 
-        // ───────────────────────────────────────────────────
         //  SECONDARY SHRAPNEL FROM NEARBY BLOCKS
-        // ───────────────────────────────────────────────────
 
         private static int SpawnSecondaryFromBlocks(ExplosionParams param, System.Random rng,
             ShrapnelProjectile.ShrapnelType primaryType, float primarySpeed)
@@ -868,9 +817,7 @@ namespace ScavShrapnelMod.Logic
             return weight;
         }
 
-        // ───────────────────────────────────────────────────
         //  BIOME EFFECTS (desert dust, cold steam)
-        // ───────────────────────────────────────────────────
 
         private static void SpawnBiomeEffects(Vector2 epicenter, float range,
             float temperature, System.Random rng, float spawnMult)

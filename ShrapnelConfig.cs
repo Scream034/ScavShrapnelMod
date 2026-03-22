@@ -131,6 +131,90 @@ namespace ScavShrapnelMod
         /// <summary>Heat multiplier for bullet shrapnel glow.</summary>
         public static ConfigEntry<float> BulletHeatMultiplier;
 
+        /// <summary>Turret fragment count multiplier. Turrets fire larger rounds → more fragments.</summary>
+        public static ConfigEntry<float> TurretFragmentMultiplier;
+
+        /// <summary>
+        /// Spark count multiplier based on bullet power.
+        /// Formula: sparks × (1 + (powerRatio - 1) × mult)
+        /// </summary>
+        public static ConfigEntry<float> BulletDamageSparkMultiplier;
+
+        /// <summary>
+        /// Fragment count/speed multiplier based on bullet power.
+        /// Formula: frags × (1 + √(powerRatio) × mult)
+        /// </summary>
+        public static ConfigEntry<float> BulletPowerFragmentMultiplier;
+
+        /// <summary>
+        /// Minimum bullet power to spawn physics fragments.
+        /// Baseline: pistol=25, rifle=80, shotgun=100+
+        /// </summary>
+        public static ConfigEntry<float> MinBulletPowerForFragments;
+
+        //  MUZZLE BLAST DUST
+
+        /// <summary>Base scan radius (blocks) for muzzle blast dust. Guns use this value directly.</summary>
+        public static ConfigEntry<int> MuzzleBlastRadius;
+
+        /// <summary>Radius multiplier for turrets. Turret radius = MuzzleBlastRadius × this value.</summary>
+        public static ConfigEntry<float> MuzzleBlastRadiusTurretMult;
+
+        /// <summary>Base particle count multiplier. Actual count = this × √(powerRatio).</summary>
+        public static ConfigEntry<float> MuzzleBlastCountMult;
+
+        /// <summary>Max particles per shot for guns.</summary>
+        public static ConfigEntry<int> MuzzleBlastMaxParticles;
+
+        /// <summary>Max particles per shot for turrets.</summary>
+        public static ConfigEntry<int> MuzzleBlastMaxParticlesTurret;
+
+        /// <summary>Minimum energy floor (0-1). Higher = more visible particles at max range.</summary>
+        public static ConfigEntry<float> MuzzleBlastMinEnergy;
+
+        /// <summary>Enable muzzle blast dust effect.</summary>
+        public static ConfigEntry<bool> EnableMuzzleBlastDust;
+
+        //  BULLET IMPACT BLOCK BLAST
+
+        /// <summary>Enable dust from nearby blocks when a bullet hits a block.</summary>
+        public static ConfigEntry<bool> EnableBulletImpactBlockBlast;
+
+        /// <summary>Scan radius (blocks) around bullet impact point for block blast dust.</summary>
+        public static ConfigEntry<int> BulletImpactBlastRadius;
+
+        /// <summary>
+        /// Base particle count multiplier for bullet impact block blast.
+        /// Actual count per surface = this × √(powerRatio) × distanceFalloff.
+        /// </summary>
+        public static ConfigEntry<float> BulletImpactBlastCountMult;
+
+        /// <summary>Max particles total per bullet impact block blast.</summary>
+        public static ConfigEntry<int> BulletImpactBlastMaxParticles;
+
+        /// <summary>
+        /// Minimum energy floor (0-1) for impact blast particles at max range.
+        /// Lower than muzzle blast (0.2 vs 0.5) — impact is more localized.
+        /// </summary>
+        public static ConfigEntry<float> BulletImpactBlastMinEnergy;
+
+        //  BULLET IMPACT — KINETIC TRANSFER
+
+        /// <summary>
+        /// Directional energy multiplier for bullet impact dust plume (0–2).
+        /// Controls how many bonus particles spawn along bullet travel axis.
+        /// 0 = no kinetic plume. 1 = balanced. 2 = very directional spray.
+        /// </summary>
+        public static ConfigEntry<float> BulletImpactKineticTransfer;
+
+        /// <summary>
+        /// Scan radius multiplier when bullet hits metal blocks.
+        /// WHY: Metal conducts kinetic energy further — shockwave travels
+        /// through connected metal structure, disturbing distant surfaces.
+        /// 1.0 = no bonus. 1.5 = 50% larger radius for metal.
+        /// </summary>
+        public static ConfigEntry<float> BulletImpactMetalConductivity;
+
         //  EXPLOSIONS — CLASSIFICATION
 
         /// <summary>Tolerance for explosion parameter comparison (+/- epsilon).</summary>
@@ -436,6 +520,118 @@ namespace ScavShrapnelMod
             BulletHeatMultiplier = cfg.Bind("Bullets", "HeatMultiplier", 0.5f,
                 "Heat multiplier for bullet shrapnel.");
 
+            TurretFragmentMultiplier = cfg.Bind("Bullets", "TurretFragmentMultiplier", 2.5f,
+                new ConfigDescription(
+                    "Fragment count multiplier for turret shots. " +
+                    "Turrets fire larger caliber rounds producing more fragments.",
+                    new AcceptableValueRange<float>(1f, 5f)));
+
+            BulletDamageSparkMultiplier = cfg.Bind("Bullets", "DamageSparkMultiplier", 1.0f,
+                new ConfigDescription(
+                    "Spark count scaling from bullet power. " +
+                    "1.0 = linear, 2.0 = double effect.",
+                    new AcceptableValueRange<float>(0f, 5f)));
+
+            BulletPowerFragmentMultiplier = cfg.Bind("Bullets", "PowerFragmentMultiplier", 0.5f,
+                new ConfigDescription(
+                    "Fragment count/speed scaling from bullet power. " +
+                    "Uses √(power) for realistic energy distribution.",
+                    new AcceptableValueRange<float>(0f, 3f)));
+
+            MinBulletPowerForFragments = cfg.Bind("Bullets", "MinPowerForFragments", 20f,
+                new ConfigDescription(
+                    "Minimum bullet power to spawn physics fragments. " +
+                    "Below this = visual sparks only.",
+                    new AcceptableValueRange<float>(5f, 100f)));
+
+            //  Muzzle Blast Dust
+            EnableMuzzleBlastDust = cfg.Bind("Effects.MuzzleBlast", "Enable", true,
+                "Enable dust/debris kicked up from nearby surfaces when firing.");
+
+            MuzzleBlastRadius = cfg.Bind("Effects.MuzzleBlast", "Radius", 8,
+                new ConfigDescription(
+                    "Base scan radius (blocks) for muzzle blast dust. " +
+                    "Guns use this value directly. Surfaces within this radius " +
+                    "of the barrel will spawn debris particles.",
+                    new AcceptableValueRange<int>(1, 20)));
+
+            MuzzleBlastRadiusTurretMult = cfg.Bind("Effects.MuzzleBlast", "RadiusTurretMultiplier", 1.5f,
+                new ConfigDescription(
+                    "Radius multiplier for turrets. " +
+                    "Turret scan radius = Radius × this value. " +
+                    "Default 1.5: guns=8 blocks, turrets=12 blocks.",
+                    new AcceptableValueRange<float>(1f, 4f)));
+
+            MuzzleBlastCountMult = cfg.Bind("Effects.MuzzleBlast", "CountMultiplier", 3f,
+                new ConfigDescription(
+                    "Base particle count multiplier per surface. " +
+                    "Actual count = this × √(bulletPower / 25). " +
+                    "Higher = more particles per exposed block face.",
+                    new AcceptableValueRange<float>(0.5f, 10f)));
+
+            MuzzleBlastMaxParticles = cfg.Bind("Effects.MuzzleBlast", "MaxParticles", 150,
+                new ConfigDescription(
+                    "Maximum particles per shot for guns (pistol, rifle, shotgun). " +
+                    "Caps total debris to prevent performance issues.",
+                    new AcceptableValueRange<int>(20, 500)));
+
+            MuzzleBlastMaxParticlesTurret = cfg.Bind("Effects.MuzzleBlast", "MaxParticlesTurret", 300,
+                new ConfigDescription(
+                    "Maximum particles per shot for turrets. " +
+                    "Higher than guns due to larger scan radius.",
+                    new AcceptableValueRange<int>(50, 800)));
+
+            MuzzleBlastMinEnergy = cfg.Bind("Effects.MuzzleBlast", "MinEnergy", 0.5f,
+                new ConfigDescription(
+                    "Minimum energy floor (0-1) for particles at max range. " +
+                    "Higher = more visible particles even at edge of blast radius. " +
+                    "0.5 = half intensity at max range, 1.0 = full intensity everywhere.",
+                    new AcceptableValueRange<float>(0.1f, 1f)));
+
+            //  Bullet Impact Block Blast
+            EnableBulletImpactBlockBlast = cfg.Bind("Effects.BulletImpactBlast", "Enable", true,
+                "Enable dust/debris emitted from nearby blocks when a bullet hits a block.");
+
+            BulletImpactBlastRadius = cfg.Bind("Effects.BulletImpactBlast", "Radius", 4,
+                new ConfigDescription(
+                    "Scan radius (blocks) around bullet impact point. " +
+                    "Metal blocks extend this via MetalConductivity multiplier. " +
+                    "Range 2-6 recommended for visible directional dust plume.",
+                    new AcceptableValueRange<int>(1, 8)));
+
+            BulletImpactBlastCountMult = cfg.Bind("Effects.BulletImpactBlast", "CountMultiplier", 2.0f,
+                new ConfigDescription(
+                    "Base particle count per surface. " +
+                    "Actual count = this × √(powerRatio) × energyFalloff. " +
+                    "Higher than before (was 1.5) for visible dust plumes.",
+                    new AcceptableValueRange<float>(0.5f, 6f)));
+
+            BulletImpactBlastMaxParticles = cfg.Bind("Effects.BulletImpactBlast", "MaxParticles", 120,
+                new ConfigDescription(
+                    "Max total particles per bullet impact block blast. " +
+                    "Doubled from 60 to support kinetic plume + conduction sparks.",
+                    new AcceptableValueRange<int>(20, 400)));
+
+            BulletImpactBlastMinEnergy = cfg.Bind("Effects.BulletImpactBlast", "MinEnergy", 0.15f,
+                new ConfigDescription(
+                    "Minimum energy floor (0-1) at max radius. " +
+                    "Lower than muzzle blast — impact energy drops sharply.",
+                    new AcceptableValueRange<float>(0.0f, 0.8f)));
+
+            BulletImpactKineticTransfer = cfg.Bind("Effects.BulletImpactBlast", "KineticTransfer", 1.0f,
+                new ConfigDescription(
+                    "Directional energy multiplier for bullet impact dust plume. " +
+                    "Controls bonus particles along bullet travel axis. " +
+                    "0 = no kinetic plume, 1 = balanced, 2 = very directional spray.",
+                    new AcceptableValueRange<float>(0f, 2f)));
+
+            BulletImpactMetalConductivity = cfg.Bind("Effects.BulletImpactBlast", "MetalConductivity", 1.5f,
+                new ConfigDescription(
+                    "Scan radius multiplier when bullet hits metal blocks. " +
+                    "Metal conducts kinetic energy further through structure. " +
+                    "1.0 = no bonus, 1.5 = 50% larger scan radius for metal.",
+                    new AcceptableValueRange<float>(1f, 3f)));
+
             //  Explosions Classification 
             ClassifyEpsilon = cfg.Bind("Explosions", "ClassifyEpsilon", 0.5f,
                 "Tolerance for explosion parameter comparison.");
@@ -445,10 +641,12 @@ namespace ScavShrapnelMod
                 "Expected dynamite range for classification.");
             DynamiteStructuralDamage = cfg.Bind("Explosions.Dynamite", "StructuralDamage", 2000f,
                 "Expected dynamite structuralDamage.");
-            DynamitePrimaryMin = cfg.Bind("Explosions.Dynamite", "PrimaryMin", 35,
-                "Min primary shrapnel count.");
-            DynamitePrimaryMax = cfg.Bind("Explosions.Dynamite", "PrimaryMax", 60,
-                "Max primary shrapnel count (exclusive).");
+            DynamitePrimaryMin = cfg.Bind("Explosions.Dynamite", "PrimaryMin", 15,
+                new ConfigDescription("Min primary shrapnel count.",
+                    new AcceptableValueRange<int>(5, 50)));
+            DynamitePrimaryMax = cfg.Bind("Explosions.Dynamite", "PrimaryMax", 30,
+                new ConfigDescription("Max primary shrapnel count (exclusive).",
+                    new AcceptableValueRange<int>(10, 80)));
             DynamiteSpeed = cfg.Bind("Explosions.Dynamite", "Speed", 40f,
                 "Base speed (m/s).");
             DynamiteVisualMin = cfg.Bind("Explosions.Dynamite", "VisualMin", 350,

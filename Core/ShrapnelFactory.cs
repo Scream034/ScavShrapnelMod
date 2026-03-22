@@ -14,21 +14,20 @@ namespace ScavShrapnelMod.Core
     ///   Server creates real physics GameObjects; clients receive ClientMirrorShrapnel via net.
     ///   Both methods guard against double-registration (register only on server).
     ///
-    /// SCALE RANGE NOTE:
-    ///   Maximum scale is Massive: 0.8 (scalePacked = 800, well within ushort range).
-    ///   scalePacked = scale × 1000 = max 800 of 65535. No overflow risk.
+    /// REFACTORED: Weight-specific data now sourced from ShrapnelWeightData table.
+    /// Trail config uses TrailConfig (single source of truth for server + client).
+    /// Material selection via SelectMaterial helper.
     /// </summary>
     public static class ShrapnelFactory
     {
         //  PHYSICS MATERIAL (shared across all fragments)
 
         private static PhysicsMaterial2D _physMat;
-        private static PhysicsMaterial2D PhysMat =>
-            _physMat ?? (_physMat = new PhysicsMaterial2D("ShrapnelMat")
+        internal static PhysicsMaterial2D PhysMat => _physMat ??= new PhysicsMaterial2D("ShrapnelMat")
             {
                 bounciness = 0.15f,
                 friction = 0.6f
-            });
+            };
 
         //  WOUND SPRITES (lazy-loaded)
 
@@ -65,6 +64,20 @@ namespace ScavShrapnelMod.Core
             return true;
         }
 
+        //  MATERIAL SELECTION (centralized — was duplicated in 4 places)
+
+        /// <summary>
+        /// Selects appropriate material based on heat level.
+        /// Hot fragments use Unlit (self-luminous), cold use Lit (reacts to lighting).
+        /// Returns null if no materials available.
+        /// </summary>
+        internal static Material SelectMaterial(float heat)
+        {
+            return heat > ShrapnelVisuals.HotThreshold
+                ? ShrapnelVisuals.UnlitMaterial
+                : (ShrapnelVisuals.LitMaterial ?? ShrapnelVisuals.UnlitMaterial);
+        }
+
         //  PHYSICS SHRAPNEL — primary damage dealers
 
         /// <summary>
@@ -95,15 +108,9 @@ namespace ScavShrapnelMod.Core
         /// <summary>
         /// Core shrapnel spawner. Creates physics GameObject with ShrapnelProjectile.
         /// Registers with DebrisTracker and (if server in MP) with ShrapnelNetSync.
-        /// Returns the ShrapnelProjectile component, or null for Micro weight.
         ///
-        /// MULTIPLAYER FIX:
-        ///   Seed is derived from explosion's RNG chain (deterministic).
-        ///   Previously used GetInstanceID() ^ Time.frameCount which diverges host↔client.
-        ///
-        /// SCALE PACK SAFETY:
-        ///   scalePacked = scale × 1000. Max scale (Massive) = 0.8 = 800.
-        ///   Well within ushort max (65535). No overflow possible.
+        /// REFACTORED: Uses ShrapnelWeightData table instead of per-field switches.
+        /// Trail setup delegated to TrailConfig.
         /// </summary>
         private static ShrapnelProjectile SpawnCore(Vector2 epicenter, float baseSpeed,
             ShrapnelProjectile.ShrapnelType type, ShrapnelWeight weight,
@@ -116,28 +123,97 @@ namespace ScavShrapnelMod.Core
                 return null;
             }
 
+            ref readonly var wd = ref ShrapnelWeightData.Get(weight);
+
             var shape = (ShrapnelVisuals.TriangleShape)rng.Next(0, 6);
             Sprite sprite = ShrapnelVisuals.GetTriangleSprite(shape);
             if (sprite == null) return null;
 
             EnsureWoundSprites();
-            float heat = HeatForWeight(weight);
 
-            // HotThreshold sourced from ShrapnelVisuals — single source of truth
-            Material mat = heat > ShrapnelVisuals.HotThreshold
-                ? ShrapnelVisuals.UnlitMaterial
-                : (ShrapnelVisuals.LitMaterial ?? ShrapnelVisuals.UnlitMaterial);
+            Material mat = SelectMaterial(wd.InitialHeat);
             if (mat == null) return null;
 
-            GameObject obj = new($"Shr_{type}_{index}");
-            obj.transform.position =
-                epicenter + rng.InsideUnitCircle() * 0.3f;
+            // PERF: Conditional string interpolation — avoid alloc in release
+            GameObject obj = ShrapnelConfig.DebugLogging.Value
+                ? new GameObject($"Shr_{type}_{index}")
+                : new GameObject("Shr");
+
+            obj.transform.position = epicenter + rng.InsideUnitCircle() * 0.3f;
             obj.layer = 0;
 
-            float scale = ScaleForWeight(weight, rng);
+            float scale = rng.Range(wd.ScaleMin, wd.ScaleMax);
             obj.transform.localScale = Vector3.one * scale;
 
             SpriteRenderer sr = obj.AddComponent<SpriteRenderer>();
+            sr.sprite = sprite;
+            sr.sortingOrder = 10;
+            sr.sharedMaterial = mat;
+            sr.color = Color.Lerp(
+                ShrapnelVisuals.GetColdColor(type),
+                ShrapnelVisuals.GetHotColor(), wd.InitialHeat);
+
+            if (wd.InitialHeat > 0.3f)
+                ParticleHelper.ApplyEmission(sr,
+                    ShrapnelVisuals.GetHotColor() * wd.InitialHeat * 1.3f);
+
+            Rigidbody2D rb = obj.AddComponent<Rigidbody2D>();
+            rb.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
+            rb.sharedMaterial = PhysMat;
+            ShrapnelWeightData.ConfigureRigidbody(rb, weight);
+
+            CircleCollider2D col = obj.AddComponent<CircleCollider2D>();
+            col.radius = wd.ColliderRadius;
+            col.sharedMaterial = PhysMat;
+            col.enabled = false; // Enabled after physics delay in ShrapnelProjectile
+
+            ShrapnelProjectile proj = obj.AddComponent<ShrapnelProjectile>();
+            proj.Type = type;
+            proj.Weight = weight;
+            proj.Heat = wd.InitialHeat;
+            proj.CanBreak = wd.CanBreak;
+            proj.Seed = ShrapnelSpawnLogic.MakeShrapnelSeed(rng);
+
+            proj.Damage = rng.Range(wd.DamageMin, wd.DamageMax);
+            proj.BleedAmount = rng.Range(wd.BleedMin, wd.BleedMax);
+            if (type == ShrapnelProjectile.ShrapnelType.HeavyMetal)
+                proj.Damage *= 1.3f;
+
+            LaunchWithDirection(rb, weight, baseSpeed, direction, rng);
+            proj.HasTrail = TrailConfig.TryAdd(obj, weight, scale, rng);
+
+            DebrisTracker.Register(obj);
+            ShrapnelNetSync.ServerRegister(proj);
+
+            return proj;
+        }
+
+        /// <summary>
+        /// Creates a client-side physics shard with all damage gated.
+        /// Shares setup logic with SpawnCore to eliminate duplication.
+        /// Called by ShrapnelNetSync.OnReceiveSpawn.
+        /// </summary>
+        internal static ShrapnelProjectile SpawnClientShard(
+            ushort netId, Vector2 position,
+            ShrapnelProjectile.ShrapnelType type, ShrapnelWeight weight,
+            float heat, ShrapnelVisuals.TriangleShape shape, float scale,
+            bool hasTrail, bool atRest, Vector2 velocity, float rotationZ)
+        {
+            Sprite sprite = ShrapnelVisuals.GetTriangleSprite(shape);
+            if (sprite == null) return null;
+
+            Material mat = SelectMaterial(heat);
+            if (mat == null) return null;
+
+            ref readonly var wd = ref ShrapnelWeightData.Get(weight);
+
+            var obj = new GameObject($"ShrC_{netId}");
+            obj.transform.position = position;
+            obj.transform.localScale = Vector3.one * scale;
+            obj.transform.rotation = Quaternion.Euler(0f, 0f, rotationZ);
+            obj.layer = 0;
+
+            var sr = obj.AddComponent<SpriteRenderer>();
             sr.sprite = sprite;
             sr.sortingOrder = 10;
             sr.sharedMaterial = mat;
@@ -149,29 +225,50 @@ namespace ScavShrapnelMod.Core
                 ParticleHelper.ApplyEmission(sr,
                     ShrapnelVisuals.GetHotColor() * heat * 1.3f);
 
-            Rigidbody2D rb = obj.AddComponent<Rigidbody2D>();
+            var rb = obj.AddComponent<Rigidbody2D>();
             rb.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
             rb.sharedMaterial = PhysMat;
-            ConfigureRigidbody(rb, weight);
+            ShrapnelWeightData.ConfigureRigidbody(rb, weight);
 
-            CircleCollider2D col = obj.AddComponent<CircleCollider2D>();
-            col.radius = weight == ShrapnelWeight.Massive ? 0.5f : 0.3f;
+            var col = obj.AddComponent<CircleCollider2D>();
+            col.radius = wd.ColliderRadius;
             col.sharedMaterial = PhysMat;
-            col.enabled = false; // Enabled after physics delay in ShrapnelProjectile
+            col.enabled = true; // WHY: No physics delay for client shards
 
-            ShrapnelProjectile proj = obj.AddComponent<ShrapnelProjectile>();
+            var proj = obj.AddComponent<ShrapnelProjectile>();
+            proj.IsServerAuthoritative = false;
+            proj.NetSyncId = netId;
             proj.Type = type;
             proj.Weight = weight;
             proj.Heat = heat;
-            proj.CanBreak = weight != ShrapnelWeight.Hot;
-            proj.Seed = ShrapnelSpawnLogic.MakeShrapnelSeed(rng);
+            proj.CanBreak = false;
+            proj.HasTrail = false;
+            proj.Seed = unchecked(netId * 397 + 42);
 
-            SetDamage(proj, type, weight, rng);
-            LaunchWithDirection(rb, weight, baseSpeed, direction, rng);
-            TryAddTrail(obj, proj, weight, rng);
+            if (atRest)
+            {
+                rb.velocity = Vector2.zero;
+                rb.isKinematic = true;
+                proj.ForceToState(ShrapnelProjectile.ExternalState.Stuck, position);
+            }
+            else
+            {
+                rb.velocity = velocity;
+                rb.AddTorque(
+                    new System.Random(unchecked(netId * 17)).Range(-500f, 500f));
+            }
 
-            DebrisTracker.Register(obj);
-            ShrapnelNetSync.ServerRegister(proj); // no-op in singleplayer/on client
+            if (hasTrail && !atRest)
+            {
+                Material trailMat = ShrapnelVisuals.TrailMaterial;
+                if (trailMat != null)
+                {
+                    var tr = obj.AddComponent<TrailRenderer>();
+                    tr.sharedMaterial = trailMat;
+                    TrailConfig.Apply(tr, weight, scale);
+                    proj.HasTrail = true;
+                }
+            }
 
             return proj;
         }
@@ -205,26 +302,15 @@ namespace ScavShrapnelMod.Core
             }
         }
 
-        //  RIGIDBODY CONFIGURATION
-        //  NOTE: gravityScale values here must match
-        //  ClientMirrorShrapnel.GravityScaleForWeight exactly.
+        //  RIGIDBODY CONFIGURATION — delegates to ShrapnelWeightData
 
+        /// <summary>
+        /// Configures Rigidbody2D for a weight class.
+        /// Delegates to ShrapnelWeightData.ConfigureRigidbody.
+        /// Kept as forwarding method for backward compatibility with existing call sites.
+        /// </summary>
         internal static void ConfigureRigidbody(Rigidbody2D rb, ShrapnelWeight weight)
-        {
-            switch (weight)
-            {
-                case ShrapnelWeight.Hot:
-                    rb.mass = 0.02f; rb.gravityScale = 0.3f; rb.drag = 0.4f; break;
-                case ShrapnelWeight.Medium:
-                    rb.mass = 0.08f; rb.gravityScale = 0.15f; rb.drag = 0.2f; break;
-                case ShrapnelWeight.Heavy:
-                    rb.mass = 0.25f; rb.gravityScale = 0.35f; rb.drag = 0.2f; break;
-                case ShrapnelWeight.Massive:
-                    rb.mass = 0.8f; rb.gravityScale = 0.5f; rb.drag = 0.1f; break;
-                case ShrapnelWeight.Micro:
-                    rb.mass = 0.005f; rb.gravityScale = 0.1f; rb.drag = 0.5f; break;
-            }
-        }
+            => ShrapnelWeightData.ConfigureRigidbody(rb, weight);
 
         //  LAUNCH
 
@@ -242,24 +328,12 @@ namespace ScavShrapnelMod.Core
         private static void LaunchWithDirection(Rigidbody2D rb, ShrapnelWeight weight,
             float baseSpeed, Vector2 direction, System.Random rng)
         {
-            float speedMult = GetSpeedMultiplier(weight, rng);
+            ref readonly var wd = ref ShrapnelWeightData.Get(weight);
+            float speedMult = rng.Range(wd.SpeedMultMin, wd.SpeedMultMax);
             float targetSpeed = MathHelper.ClampSpeed(
                 baseSpeed * speedMult, ShrapnelSpawnLogic.GlobalMaxSpeed);
             rb.AddForce(direction * targetSpeed * rb.mass, ForceMode2D.Impulse);
             rb.AddTorque(rng.Range(-500f, 500f));
-        }
-
-        private static float GetSpeedMultiplier(ShrapnelWeight weight, System.Random rng)
-        {
-            return weight switch
-            {
-                ShrapnelWeight.Micro => rng.Range(1.5f, 2.5f),
-                ShrapnelWeight.Hot => rng.Range(0.8f, 1.3f),
-                ShrapnelWeight.Medium => rng.Range(0.8f, 1.2f),
-                ShrapnelWeight.Heavy => rng.Range(0.4f, 0.8f),
-                ShrapnelWeight.Massive => rng.Range(0.2f, 0.4f),
-                _ => 1f,
-            };
         }
 
         //  VISUAL SHRAPNEL — spark shower (ParticlePool)
@@ -367,7 +441,6 @@ namespace ScavShrapnelMod.Core
 
             int count = rng.Range(2, 4);
             ShrapnelWeight childWeight = GetChildWeight(parentWeight);
-            var matProps = GetMaterialProperties(type);
 
             Material litMat = ShrapnelVisuals.LitMaterial
                 ?? ShrapnelVisuals.UnlitMaterial;
@@ -375,26 +448,7 @@ namespace ScavShrapnelMod.Core
 
             for (int i = 0; i < count; i++)
                 SpawnBreakFragment(position, impactNormal, parentScale, type,
-                    childWeight, impactSpeed, i, rng, litMat, matProps);
-        }
-
-        private readonly struct MaterialProps
-        {
-            public readonly float SpeedMult;
-            public readonly float DamageMult;
-            public MaterialProps(float s, float d) { SpeedMult = s; DamageMult = d; }
-        }
-
-        private static MaterialProps GetMaterialProperties(
-            ShrapnelProjectile.ShrapnelType type)
-        {
-            return type switch
-            {
-                ShrapnelProjectile.ShrapnelType.Metal or ShrapnelProjectile.ShrapnelType.HeavyMetal => new MaterialProps(0.3f, 1.4f),
-                ShrapnelProjectile.ShrapnelType.Wood => new MaterialProps(0.7f, 0.6f),
-                ShrapnelProjectile.ShrapnelType.Stone => new MaterialProps(0.5f, 1f),
-                _ => new MaterialProps(0.5f, 1f),
-            };
+                    childWeight, impactSpeed, i, rng, litMat);
         }
 
         private static ShrapnelWeight GetChildWeight(ShrapnelWeight parent)
@@ -411,13 +465,22 @@ namespace ScavShrapnelMod.Core
         private static void SpawnBreakFragment(Vector2 position, Vector2 impactNormal,
             float parentScale, ShrapnelProjectile.ShrapnelType type,
             ShrapnelWeight weight, float impactSpeed, int index,
-            System.Random rng, Material mat, MaterialProps matProps)
+            System.Random rng, Material mat)
         {
+            ref readonly var wd = ref ShrapnelWeightData.Get(weight);
+
+            // WHY: HeavyMetal damage multiplier from material properties
+            float damageMult = (type == ShrapnelProjectile.ShrapnelType.Metal ||
+                               type == ShrapnelProjectile.ShrapnelType.HeavyMetal)
+                ? 1.4f : (type == ShrapnelProjectile.ShrapnelType.Wood ? 0.6f : 1f);
+            float speedMult = (type == ShrapnelProjectile.ShrapnelType.Metal ||
+                              type == ShrapnelProjectile.ShrapnelType.HeavyMetal)
+                ? 0.3f : (type == ShrapnelProjectile.ShrapnelType.Wood ? 0.7f : 0.5f);
+
             GameObject obj = new($"ShrBrk_{index}");
             float childScale = Mathf.Max(parentScale * rng.Range(0.4f, 0.6f), 0.05f);
 
-            obj.transform.position =
-                position + rng.InsideUnitCircle() * 0.15f;
+            obj.transform.position = position + rng.InsideUnitCircle() * 0.15f;
             obj.transform.localScale = Vector3.one * childScale;
             obj.layer = 0;
 
@@ -432,7 +495,7 @@ namespace ScavShrapnelMod.Core
             rb.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
             rb.sharedMaterial = PhysMat;
             rb.drag = 0.3f;
-            ConfigureRigidbody(rb, weight);
+            ShrapnelWeightData.ConfigureRigidbody(rb, weight);
 
             CircleCollider2D col = obj.AddComponent<CircleCollider2D>();
             col.radius = 0.25f;
@@ -443,7 +506,7 @@ namespace ScavShrapnelMod.Core
             proj.Weight = weight;
             proj.Heat = 0.1f;
             proj.CanBreak = false;
-            proj.Damage = rng.Range(2f, 6f) * matProps.DamageMult;
+            proj.Damage = rng.Range(2f, 6f) * damageMult;
             proj.BleedAmount = rng.Range(0.3f, 1.5f);
             proj.Seed = rng.Next();
 
@@ -452,113 +515,45 @@ namespace ScavShrapnelMod.Core
             dir.y = Mathf.Abs(dir.y) * 0.5f + 0.1f;
 
             float childSpeed = MathHelper.ClampSpeed(
-                impactSpeed * rng.Range(0.2f, 0.5f) * matProps.SpeedMult,
+                impactSpeed * rng.Range(0.2f, 0.5f) * speedMult,
                 ShrapnelSpawnLogic.GlobalMaxSpeed);
 
             rb.AddForce(dir * childSpeed * rb.mass * 5f, ForceMode2D.Impulse);
             rb.AddTorque(rng.Range(-300f, 300f));
 
             DebrisTracker.Register(obj);
-            ShrapnelNetSync.ServerRegister(proj); // no-op in singleplayer/on client
+            ShrapnelNetSync.ServerRegister(proj);
         }
 
-        //  UTILITIES
+        //  UTILITIES — kept for backward compatibility
 
+        /// <summary>Kept for call sites that use it directly.</summary>
         internal static float ScaleForWeight(ShrapnelWeight w, System.Random rng)
         {
-            return w switch
-            {
-                ShrapnelWeight.Micro => rng.Range(0.02f, 0.05f),
-                ShrapnelWeight.Hot => rng.Range(0.08f, 0.14f),
-                ShrapnelWeight.Medium => rng.Range(0.14f, 0.25f),
-                ShrapnelWeight.Heavy => rng.Range(0.22f, 0.45f),
-                ShrapnelWeight.Massive => rng.Range(0.5f, 0.8f),
-                _ => 0.18f,
-            };
+            ref readonly var d = ref ShrapnelWeightData.Get(w);
+            return rng.Range(d.ScaleMin, d.ScaleMax);
         }
 
         internal static float HeatForWeight(ShrapnelWeight w)
-        {
-            return w switch
-            {
-                ShrapnelWeight.Micro => 1.0f,
-                ShrapnelWeight.Hot => 1.0f,
-                ShrapnelWeight.Medium => 0.4f,
-                ShrapnelWeight.Heavy => 0.15f,
-                ShrapnelWeight.Massive => 0.08f,
-                _ => 0f,
-            };
-        }
+            => ShrapnelWeightData.Get(w).InitialHeat;
 
         internal static void SetDamage(ShrapnelProjectile proj,
             ShrapnelProjectile.ShrapnelType type,
             ShrapnelWeight weight, System.Random rng)
         {
-            switch (weight)
-            {
-                case ShrapnelWeight.Micro:
-                    proj.Damage = rng.Range(1f, 3f);
-                    proj.BleedAmount = rng.Range(0.2f, 0.8f); break;
-                case ShrapnelWeight.Hot:
-                    proj.Damage = rng.Range(3f, 8f);
-                    proj.BleedAmount = rng.Range(0.5f, 2f); break;
-                case ShrapnelWeight.Medium:
-                    proj.Damage = rng.Range(6f, 15f);
-                    proj.BleedAmount = rng.Range(1f, 4f); break;
-                case ShrapnelWeight.Heavy:
-                    proj.Damage = rng.Range(12f, 25f);
-                    proj.BleedAmount = rng.Range(2f, 6f); break;
-                case ShrapnelWeight.Massive:
-                    proj.Damage = rng.Range(25f, 50f);
-                    proj.BleedAmount = rng.Range(5f, 12f); break;
-            }
+            ref readonly var d = ref ShrapnelWeightData.Get(weight);
+            proj.Damage = rng.Range(d.DamageMin, d.DamageMax);
+            proj.BleedAmount = rng.Range(d.BleedMin, d.BleedMax);
             if (type == ShrapnelProjectile.ShrapnelType.HeavyMetal)
                 proj.Damage *= 1.3f;
         }
 
+        /// <summary>Kept for backward compatibility. Delegates to TrailConfig.</summary>
         internal static void TryAddTrail(GameObject obj, ShrapnelProjectile proj,
             ShrapnelWeight weight, System.Random rng)
         {
-            bool give = weight == ShrapnelWeight.Hot
-                || weight == ShrapnelWeight.Massive
-                || (weight == ShrapnelWeight.Medium && rng.NextDouble() < 0.25);
-            if (!give) return;
-
-            Material mat = ShrapnelVisuals.TrailMaterial;
-            if (mat == null) return;
-
-            TrailRenderer tr = obj.AddComponent<TrailRenderer>();
-            tr.sharedMaterial = mat;
-            tr.sortingOrder = 9;
-            tr.numCapVertices = 1;
-            tr.autodestruct = false;
-
-            float scale = obj.transform.localScale.x;
-            ConfigureTrail(tr, weight, scale);
-            proj.HasTrail = true;
-        }
-
-        private static void ConfigureTrail(TrailRenderer tr,
-            ShrapnelWeight weight, float scale)
-        {
-            switch (weight)
-            {
-                case ShrapnelWeight.Massive:
-                    tr.time = 0.4f;
-                    tr.startWidth = 0.12f * scale * 5f; tr.endWidth = 0f;
-                    tr.startColor = new Color(0.3f, 0.25f, 0.2f, 0.8f);
-                    tr.endColor = new Color(0.2f, 0.2f, 0.2f, 0f); break;
-                case ShrapnelWeight.Hot:
-                    tr.time = 0.25f;
-                    tr.startWidth = 0.06f * scale * 10f; tr.endWidth = 0f;
-                    tr.startColor = new Color(1f, 0.5f, 0.1f, 0.9f);
-                    tr.endColor = new Color(1f, 0.2f, 0f, 0f); break;
-                default:
-                    tr.time = 0.15f;
-                    tr.startWidth = 0.04f * scale * 10f; tr.endWidth = 0f;
-                    tr.startColor = new Color(0.6f, 0.6f, 0.6f, 0.6f);
-                    tr.endColor = new Color(0.4f, 0.4f, 0.4f, 0f); break;
-            }
+            proj.HasTrail = TrailConfig.TryAdd(obj, weight,
+                obj.transform.localScale.x, rng);
         }
     }
 }

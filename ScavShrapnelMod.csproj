@@ -46,7 +46,7 @@
   </PropertyGroup>
 
   <!--
-       SOURCE FILES
+    SOURCE FILES
   -->
   <ItemGroup>
     <!-- Root -->
@@ -56,7 +56,11 @@
     <Compile Include="Properties\AssemblyInfo.cs" />
 
     <!-- Patches -->
-    <Compile Include="Patches\ExplosionPatches.cs" />
+    <Compile Include="Patches\ExplosionTracker.cs" />
+    <Compile Include="Patches\CreateExplosionPatch.cs" />
+    <Compile Include="Patches\DestroyBackupPatch.cs" />
+    <Compile Include="Patches\ShotDetectorPatches.cs" />
+    <Compile Include="Patches\TurretPatches.cs" />
 
     <!-- Core -->
     <Compile Include="Core\AshParticlePool.cs" />
@@ -64,6 +68,8 @@
     <Compile Include="Core\ParticlePool.cs" />
     <Compile Include="Core\ParticlePoolManager.cs" />
     <Compile Include="Core\DebrisTracker.cs" />
+    <Compile Include="Core\ShrapnelWeightData.cs" />
+    <Compile Include="Core\TrailConfig.cs" />
     <Compile Include="Core\ShrapnelVisuals.cs" />
     <Compile Include="Core\ShrapnelFactory.cs" />
 
@@ -78,8 +84,9 @@
     <Compile Include="Effects\ExplosionLogger.cs" />
 
     <!-- Logic -->
+    <Compile Include="Logic\ShotEffectRouter.cs" />
+    <Compile Include="Logic\ShrapnelDamage.cs" />
     <Compile Include="Logic\ShrapnelSpawnLogic.cs" />
-    <Compile Include="Logic\BulletShrapnelLogic.cs" />
 
     <!-- Net -->
     <Compile Include="Net\ShrapnelNetSync.cs" />
@@ -157,6 +164,10 @@
     </Reference>
     <Reference Include="UnityEngine.GridModule">
       <HintPath>Libraries\UnityEngine.GridModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.AnimationModule">
+      <HintPath>Libraries\UnityEngine.AnimationModule.dll</HintPath>
       <Private>False</Private>
     </Reference>
 

@@ -1,293 +1,83 @@
-# ScavShrapnelMod — Build & Usage Guide
+# Shrapnel Overhaul Mod — Developer & Architecture Guide
 
-> **BUILD.md version:** `0.8.4`
+Welcome under the hood. This document details the technical architecture, network protocol, and algorithms used in the Shrapnel Overhaul Mod (v0.9.2). 
 
-## Table of Contents
+If you are a modder or a C# developer, this guide explains how the mod bypasses Unity's standard limitations to achieve massive scale and perfect multiplayer synchronization.
 
-1. [Prerequisites](#prerequisites)
-2. [Setting up Libraries](#setting-up-libraries)
-3. [Configuring Game Path](#configuring-game-path)
-4. [Building](#building)
-5. [Manual Install](#manual-install)
-6. [Game Version Compatibility](#game-version-compatibility)
-7. [Console Commands](#console-commands)
+## 🏗️ Core Architecture & Performance
 
----
+The mod replaces standard Unity `Instantiate`/`Destroy` calls with a custom engine to achieve zero-GC (Garbage Collection) allocations during steady-state gameplay.
 
-## Prerequisites
+### 1. Zero-GC Particle Engine (`AshParticlePoolManager`)
+- **Flat-Array Ring Buffer:** Pre-allocates up to 8,500 custom particle slots (`AshParticlePooled`). Uses `SetActive(false)` for recycling.
+- **Frame-Staggered Physics:** Particles simulate quadratic drag ($F \propto v^2$) and thermal lift. Expensive Perlin-noise turbulence is staggered (calculated every 3rd frame with a $\times3$ multiplier) to drastically reduce CPU overhead.
+- **GPU-Batched Sparks:** Small, fast sparks bypass GameObjects entirely. They are routed to Unity's `ParticleSystem` (`ParticlePoolManager`) using `RenderMode.Stretch`. This allows thousands of sparks to render with near-zero CPU cost.
+- **Shader Self-Healing:** Vanilla Scav has a bug where chunk unloading corrupts `Shader.Find` references. The mod runs a background routine (`HealMaterials`) every 60 frames to detect and repair broken materials on the fly.
 
-| Tool | Version | Notes |
-|------|---------|-------|
-| VS Code | 1.80+ | With C# Dev Kit extension |
-| .NET Framework SDK | 4.8 | [Download](https://dotnet.microsoft.com/download/dotnet-framework/net48) |
-| MSBuild | 17.x+ | Included with VS Build Tools or Visual Studio |
-| Game | Casualties Unknown | Any supported version (see [compatibility](#game-version-compatibility)) |
-| BepInEx | 5.4.x | Installed in game folder |
+### 2. Reflection & Shot Detection (`ShotDetectorPatches`)
+Unity 2022.3 Mono JIT occasionally ignores Harmony Transpilers. To ensure 100% reliable shot detection without breaking the game:
+- **Hybrid Polling:** Instead of risky IL injection, the mod uses lightweight `MonoBehaviour` polling to detect rising edges on `GunScript.muzzleParticle.isEmitting` and `TurretScript.didShoot`.
+- **Dynamic Power Scaling:** Weapon power is extracted via Reflection:  
+  `Power = structureDamage * (1 + knockBack/10) * max(1, shotsPerFire)`
+  *(v0.9.2 fix: `Convert.ToSingle` is used for type-safe unboxing to prevent `InvalidCastException` on boxed ints).*
 
-### Required VS Code Extensions
+## 🌐 Network Protocol v4 (Client Physics Rewrite)
 
-Recommended extensions are listed in `.vscode/extensions.json` and prompted on first open:
+The mod features a custom, server-authoritative network protocol built via Reflection into `Unity.Netcode`. It **does not** require the MP mod to compile or run in singleplayer.
 
-| Extension | Purpose |
-|-----------|---------|
-| `ms-dotnettools.csdevkit` | C# language support, IntelliSense |
-| `ms-dotnettools.csharp` | OmniSharp C# engine |
-| `redhat.vscode-xml` | XML/csproj editing |
+In v0.8.4, the network architecture was completely rewritten to drop bandwidth by ~90%.
 
-### MSBuild in PATH
+### The Elimination of `MSG_SNAPSHOT`
+Previous versions sent position updates 10 times a second for every flying shard. **Protocol v4 deletes this entirely.**
+1. **`MSG_SPAWN` (Reliable, Batched):** Server sends initial vectors (Position, Velocity, Rotation, Type, Weight, Heat).
+2. **Real Client Physics:** Clients create a **real** `Rigidbody2D` and `CircleCollider2D`. The local Unity physics engine handles bouncing and ricochets perfectly.
+3. **Damage Gating:** On the client, `IsServerAuthoritative = false` is set. The FSM runs, but collisions with limbs/entities are silently ignored to prevent phantom double-damage.
+4. **`MSG_STATE` (Rest Correction):** Due to float drift and block destruction timing, server and client physics may slightly diverge. When a shard stops moving on the server, it sends a final `MSG_STATE`. The client smoothly snaps the shard to this authoritative resting position (`ForceToState`).
+5. **`MSG_DESTROY`:** Triggers a 150ms visual fade-out on the client to hide any slight positional desync before deletion.
 
-The build task uses `msbuild` from the shell. If it's not found:
+## 💥 Kinetic Energy Transfer & Geometry Algorithms (v0.9.2)
 
-**Option A** — Use VS Developer Command Prompt as VS Code terminal:
-```
-Menu → Terminal → New Terminal → Select "Developer Command Prompt"
-```
+To make bullet impacts and muzzle blasts look realistic, the mod calculates geometry in real-time.
 
-**Option B** — Add MSBuild to your system PATH:
-```
-C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin
-```
-or (Build Tools only):
-```
-C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin
-```
+### 1. Column-Scan Surface Detection
+Instead of a slow $O(N^2)$ brute-force grid scan, the mod uses a $O(scanDepth)$ column-scan algorithm for muzzle blasts. 
+For each X-offset, it scans downward to find the first Air $\rightarrow$ Solid transition. This guarantees finding the actual exposed ground, ceiling, and walls efficiently, allowing the blast radius to safely increase from 8 to 12 blocks.
 
-## Configuring Game Path
+### 2. Kinetic Impact Model
+When a bullet hits a block, it doesn't just create sparks; it transfers momentum.
+- **Directional Plume:** Dust sprays *backward* from the impact point (`-bulletDir`), simulating material blowing out of the entry hole.
+- **Material Conductivity:** Metal blocks conduct kinetic energy further (scan radius $\times1.5$). Soft blocks (sand/flesh) absorb energy (radius $\times0.7$, particle density $\times1.4$).
+- **SafeBlastDirection:** A dot-product check (`Vector2.Dot`) ensures particles never spray *into* a solid block. If the blast direction opposes the face normal, the vector is reflected.
 
-The post-build task copies `ScavShrapnelMod.dll` to `<GameDir>\BepInEx\plugins\`.  
-The game path must be set before building.
+## 💻 Advanced Console Commands
 
-### Option A — `Directory.Build.props` (checked in, team default)
-
-Edit the default in `Directory.Build.props`:
-```xml
-<GameDir Condition=" '$(GameDir)' == '' ">D:\Games\Scav</GameDir>
-```
-This applies to everyone who doesn't override it.
-
-### Option B — `ScavShrapnelMod.csproj.user` (git-ignored, recommended)
-
-Create `ScavShrapnelMod.csproj.user` next to the csproj:
-```xml
-<?xml version="1.0" encoding="utf-8"?>
-<Project>
-  <PropertyGroup>
-    <GameDir>D:\SteamLibrary\steamapps\common\CasualtiesUnknown</GameDir>
-  </PropertyGroup>
-</Project>
-```
-
-### Option C — Environment variable
-
-```cmd
-set GameDir=D:\Games\Scav
-```
-MSBuild picks up environment variables as properties.
-
-### Also update VS Code settings
-
-Edit `.vscode/settings.json` to match your game path:
-```json
-{
-    "scavGame.path": "D:\\Games\\Scav\\CasualtiesUnknown.exe",
-    "scavGame.dir": "D:\\Games\\Scav"
-}
-```
-These are used by the `launch-game` task.
-
----
-
-## Building
-
-### Debug build (Ctrl+Shift+B)
-
-The default VS Code build task runs:
-```
-dotnet build ScavShrapnelMod.csproj /p:Configuration=Debug
-```
-
-- Full PDB symbols, no optimization
-- DLL auto-deployed to game plugins folder
-- Console output shows deploy path or missing-directory warning
-
-### Release build
-
-From VS Code Command Palette (`Ctrl+Shift+P`):
-```
-Tasks: Run Task → build-release
-```
-
-Or from terminal:
-```
-dotnet build ScavShrapnelMod.csproj /p:Configuration=Release
-```
-
-- Optimized, no debug symbols
-- Output: `bin\Release\ScavShrapnelMod.dll`
-
-### Build and launch game
-
-From Command Palette:
-```
-Tasks: Run Task → build-and-launch
-```
-
-Builds in Debug, then starts the game executable.
-
-### If `dotnet` is not found
-
-Install the [.NET SDK](https://dotnet.microsoft.com/download) (any version 6+).
-The `dotnet build` command can build .NET Framework 4.8 projects when the targeting pack is installed.
-
-### Build and launch game
-
-From Command Palette:
-```
-Tasks: Run Task → build-and-launch
-```
-
-Builds in Debug, then starts the game executable.
-
-### Post-build behavior
-
-| Condition | Result |
-|-----------|--------|
-| `<GameDir>\BepInEx\plugins\` exists | DLL copied, success message |
-| Directory doesn't exist | Build succeeds, warning printed |
-| DLL unchanged since last copy | Skip (SkipUnchangedFiles) |
-
----
-
-## Manual Install
-
-Copy the built DLL to:
-```
-<GameDir>\BepInEx\plugins\ScavShrapnelMod.dll
-```
-
-No other files required. Config is generated on first launch.
-
----
-
-## Game Version Compatibility
-
-The mod detects the game version at startup by reading the version label from the main menu UI.
-
-| Game Version | Code | Status |
-|-------------|------|--------|
-| 5.1 | `5.1` | Tested |
-| V5 Pre-testing 5 | `v5p5` | Tested |
-| V5 Pre-testing 4 | `v5p4` | Tested |
-| v5 release | `v5d` | Tested |
-| Unknown / newer | — | ⚠️ Warning, mod still loads |
-
-### What happens on unsupported version
-
-1. Warning in BepInEx log: `[Version] WARNING: Game version 'X' is not tested...`
-2. Warning in in-game console on first explosion
-3. **Mod continues to run** — no hard block, graceful degradation
-4. Report issues if effects break on new versions
-
-### Adding support for new versions
-
-Edit `Helpers/GameVersionChecker.cs`:
-```csharp
-private static readonly (string ObjectName, string LabelContains, string Code)[]
-    KnownVersions =
-{
-    ("VersionObjectName", "Version Label Text", "code"),
-    // ... existing entries
-};
-
-private static readonly string[] SupportedCodes = { "code", /* ... */ };
-```
-
----
-
-## Configuration
-
-### File location
-
-Auto-generated on first run:
-```
-<GameDir>\BepInEx\config\ScavShrapnelMod.cfg
-```
-
-Every parameter is documented in the config file itself.
-
-### Automatic migration
-
-When the mod version changes:
-1. Old config backed up → `ScavShrapnelMod.cfg.backup.<oldversion>`
-2. Old config deleted
-3. Fresh config generated with new defaults
-4. Notification shown in console on first load
-
----
-
-## Console Commands
-
-Open the in-game console (`~`). All commands support flexible, order-independent arguments.
+Open the in-game console (`~`). Commands support flexible, order-independent arguments.
 
 ### `shrapnel_explode`
-
 Creates an explosion with full shrapnel effects.
+`shrapnel_explode [type] [origin] [-e][-net]`
+* `type`: `mine`, `dynamite`, `turret`, `gravbag`
+* `-e`: Effects only (no block destruction)
+* `-net`: Print network diagnostics after execution.
 
-```
-shrapnel_explode [type] [origin] [-e] [-net]
-```
+### `shrapnel_shot`
+Tests the full bullet effect pipeline at the cursor position.
+`shrapnel_shot [preset|power] [L|R|U|D] [-metal][muzzle|impact|sparks]`
+* `preset`: `pistol`, `rifle`, `shotgun`, `turret`
+* `direction`: `L`, `R`, `U`, `D` (Bullet travel direction)
+* `-metal`: Forces the system to treat the impact surface as metal.
+* *Example:* `shrapnel_shot rifle R -metal` (Simulates a rifle shot from the right hitting metal).
 
-| Argument | Values | Default | Description |
-|----------|--------|---------|-------------|
-| type | `mine` `dynamite` `turret` `gravbag` | `mine` | Explosion profile |
-| origin | `player` `cursor` | `cursor` | Spawn location |
-| `-e` | — | — | Effects only (no block destruction) |
-| `-net` | — | — | Print network diagnostics after |
+### `shrapnel_guninfo [all]`
+Dumps `GunScript` fields of the currently held weapon via Reflection to diagnose power calculation issues.
 
-```
-shrapnel_explode dynamite player -e    # visual dynamite at player
-shrapnel_explode turret -net           # real turret explosion + net info
-shrapnel_explode                       # mine at cursor (default)
-```
+### `shrapnel_highlight [seconds]`
+Sets all physics shards to top sorting order and applies a bright orange glow. Useful for debugging shards clipping into terrain. (Default: 10s. Use `0` to disable).
 
-### `shrapnel_debris`
+### `shrapnel_status [mat | full]`
+* `(none)`: Shows Pool counts, active particles, and MP role.
+* `mat`: Tests material/shader state (useful for debugging Unity chunk-unload shader corruption).
+* `full`: Dumps all current config values.
 
-Spawns physics shrapnel fragments at cursor.
-
-```
-shrapnel_debris [count] [force] [type] [-v] [-net]
-```
-
-| Argument | Values | Default | Description |
-|----------|--------|---------|-------------|
-| count | `1`–`100` | `5` | Number of fragments |
-| force | float | `0` | Launch force |
-| type | `metal` `stone` `heavy` `wood` `electronic` `all` | `metal` | Material type |
-| `-v` | — | — | Verbose: log each fragment |
-| `-net` | — | — | Print network status after |
-
-```
-shrapnel_debris 10 50 wood -v     # 10 wood fragments, force 50, verbose
-shrapnel_debris all               # cycle all types and weights
-shrapnel_debris 20 metal -net     # 20 metal with net diagnostics
-```
-
-### `shrapnel_clear`
-
-Destroys all active physics shrapnel and clears particle pools.
-
-### `shrapnel_status`
-
-Brief performance overview.
-
-```
-v0.8.4 | Phys:42 Lit:1200/6000 Unlit:300/2500 Spark:50 | Total: 1592 | MP:HOST | NET:SERVER tracked=42
-```
-
-### `shrapnel_net`
-
-Detailed network sync diagnostics: MP detection, role, tracked/mirror counts, message counters, NGO reflection state.
-
-### `shrapnel_testmat`
-
-Checks for shader/material corruption from vanilla chunk unloading. Reports Lit/Unlit/Trail material status, shader names, and count of corrupted SpriteRenderers in scene.
+### `shrapnel_net [diag]`
+Dumps detailed network sync diagnostics. `diag` provides a step-by-step check of why fragments might not be syncing to clients.

@@ -11,15 +11,21 @@ using ScavShrapnelMod.Helpers;
 namespace ScavShrapnelMod
 {
     /// <summary>
-    /// BepInEx plugin entry point. Manages Harmony patches, visual warmup,
-    /// console command registration, and world lifecycle.
+    /// BepInEx plugin entry point.
+    ///
+    /// DETECTION ARCHITECTURE:
+    ///   Layer 1: Harmony Prefix/Postfix — WorldGeneration.CreateExplosion (public static)
+    ///   Layer 2: Harmony PatchAll — DestroyBackupPatch, WorldLoadPatch, etc.
+    ///   Layer 3: MonoBehaviour polling — TurretShotMonitor, GunShotMonitor
+    ///            (Harmony can't intercept private Update() on Unity 2022.3)
+    ///   Layer 4: MonoBehaviour polling — TurretDeathMonitor (health ≤ 0)
     /// </summary>
     [BepInPlugin(Guid, Name, Version)]
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "ScavShrapnelMod";
         public const string Name = "ScavShrapnelMod";
-        public const string Version = "0.8.4";
+        public const string Version = "0.9.2";
 
         internal static BepInEx.Logging.ManualLogSource Log;
         internal static bool CommandsRegistered;
@@ -47,7 +53,7 @@ namespace ScavShrapnelMod
 
         private void ApplyPatches()
         {
-            // LAYER 1: Manual Harmony patch on CreateExplosion
+            // LAYER 1: WorldGeneration.CreateExplosion (manual — needs priority)
             try
             {
                 var targetMethod = AccessTools.Method(
@@ -60,19 +66,23 @@ namespace ScavShrapnelMod
                     _harmony.Patch(
                         targetMethod,
                         prefix: new HarmonyMethod(
-                            AccessTools.Method(typeof(CreateExplosionPatch),
+                            AccessTools.Method(
+                                typeof(CreateExplosionPatch),
                                 nameof(CreateExplosionPatch.Prefix)))
                         { priority = Priority.Low },
                         postfix: new HarmonyMethod(
-                            AccessTools.Method(typeof(CreateExplosionPatch),
+                            AccessTools.Method(
+                                typeof(CreateExplosionPatch),
                                 nameof(CreateExplosionPatch.Postfix)))
                         { priority = Priority.Last });
 
-                    Logger.LogInfo("[Patch] ✓ Layer 1: WorldGeneration.CreateExplosion");
+                    Logger.LogInfo(
+                        "[Patch] ✓ Layer 1: WorldGeneration.CreateExplosion");
                 }
                 else
                 {
-                    Logger.LogError("[Patch] ✗ Layer 1: CreateExplosion not found!");
+                    Logger.LogError(
+                        "[Patch] ✗ Layer 1: CreateExplosion not found!");
                 }
             }
             catch (Exception e)
@@ -80,15 +90,46 @@ namespace ScavShrapnelMod
                 Logger.LogError($"[Patch] ✗ Layer 1: {e.Message}");
             }
 
-            // LAYERS 2-4: Attribute-based (Destroy hook, TurretUpdate, TurretShoot)
+            // LAYER 2: PatchAll (DestroyBackupPatch, ConsoleStartPatch,
+            //           WorldLoadPatch, PlayerCameraStartPatch)
             try
             {
                 _harmony.PatchAll();
-                Logger.LogInfo("[Patch] ✓ Layers 2-4: PatchAll complete");
+                Logger.LogInfo("[Patch] ✓ PatchAll complete");
             }
             catch (Exception e)
             {
-                Logger.LogWarning($"[Patch] Layers 2-4 warning: {e.Message}");
+                Logger.LogError(
+                    $"[Patch] PatchAll FAILED: {e.Message}\n{e.StackTrace}");
+            }
+
+            // LAYER 3: Shot detectors (MonoBehaviour — proven stable)
+            ShotDetectorPatches.CreateDetectors();
+
+            // LAYER 4: Turret death monitor
+            CreateMonoBehaviour<TurretDeathMonitor>("TurretDeathMonitor");
+
+            Logger.LogInfo("[Patch] ✓ All detection layers active");
+        }
+
+        /// <summary>
+        /// Creates a persistent DontDestroyOnLoad MonoBehaviour.
+        /// </summary>
+        private void CreateMonoBehaviour<T>(string name) where T : MonoBehaviour
+        {
+            try
+            {
+                var go = new GameObject($"ShrapnelMod_{name}")
+                {
+                    hideFlags = HideFlags.HideAndDontSave
+                };
+                DontDestroyOnLoad(go);
+                go.AddComponent<T>();
+                Logger.LogInfo($"[Patch] ✓ {name} created");
+            }
+            catch (Exception e)
+            {
+                Logger.LogError($"[Patch] ✗ {name}: {e.Message}");
             }
         }
 
@@ -114,19 +155,16 @@ namespace ScavShrapnelMod
             _harmony?.UnpatchSelf();
         }
 
-        /// <summary>
-        /// Registers console commands. Called once when ConsoleScript is available.
-        /// </summary>
         internal static void RegisterCommands()
         {
             if (CommandsRegistered) return;
-
             try
             {
                 Console.Register();
                 CommandsRegistered = true;
                 Log.LogInfo("[Console] Commands registered successfully");
-                Console.Log($"v{Version} loaded! Type 'help' to see shrapnel_ commands.");
+                Console.Log(
+                    $"v{Version} loaded! Type 'help' to see shrapnel_ commands.");
             }
             catch (Exception e)
             {
@@ -134,10 +172,6 @@ namespace ScavShrapnelMod
             }
         }
 
-        /// <summary>
-        /// Initializes visual assets, particle pools, and network sync.
-        /// Safe to call multiple times — subsequent calls are no-ops.
-        /// </summary>
         internal static void WarmVisuals()
         {
             if (VisualsWarmed) return;
@@ -152,20 +186,17 @@ namespace ScavShrapnelMod
                 if (MultiplayerHelper.IsNetworkRunning)
                     ShrapnelNetSync.Initialize();
 
-                Log.LogInfo($"[Init] Warmed." +
-                    $" AshPools={AshParticlePoolManager.Initialized}" +
+                Log.LogInfo(
+                    $"[Init] Warmed. AshPools={AshParticlePoolManager.Initialized}" +
                     $" SparkPool={ParticlePoolManager.Initialized}");
             }
             catch (Exception e)
             {
-                Log.LogError($"[Init] PreWarm FAILED: {e.Message}\n{e.StackTrace}");
+                Log.LogError(
+                    $"[Init] PreWarm FAILED: {e.Message}\n{e.StackTrace}");
             }
         }
 
-        /// <summary>
-        /// Full cleanup and re-initialization for world transitions.
-        /// Shuts down network sync, resets materials, restarts pools.
-        /// </summary>
         internal static void OnWorldLoad()
         {
             ShrapnelNetSync.Shutdown();
@@ -174,6 +205,10 @@ namespace ScavShrapnelMod
             AshParticlePoolManager.Shutdown();
             ParticlePoolManager.Shutdown();
             ShrapnelSpawnLogic.ResetThrottle();
+
+            // WHY: Clear stale GunScript/TurretScript references from previous world
+            ShotDetectorPatches.ForceRescan();
+
             WarmVisuals();
             ShowConfigResetNotification();
         }
@@ -191,10 +226,6 @@ namespace ScavShrapnelMod
         }
     }
 
-    /// <summary>
-    /// Polls for ConsoleScript availability during startup.
-    /// Self-destructs after registering commands or when no longer needed.
-    /// </summary>
     internal sealed class ConsoleCommandRegistrar : MonoBehaviour
     {
         private void Update()
@@ -204,7 +235,6 @@ namespace ScavShrapnelMod
                 Destroy(gameObject);
                 return;
             }
-
             if (ConsoleScript.instance != null &&
                 ConsoleScript.Commands != null &&
                 ConsoleScript.Commands.Count > 0)
@@ -215,33 +245,21 @@ namespace ScavShrapnelMod
         }
     }
 
-    /// <summary>Fallback: registers commands when ConsoleScript.Start fires.</summary>
     [HarmonyPatch(typeof(ConsoleScript), "Start")]
     internal static class ConsoleStartPatch
     {
         [HarmonyPostfix]
         static void Postfix()
         {
-            if (ConsoleScript.Commands?.Count > 0 && !Plugin.CommandsRegistered)
+            if (ConsoleScript.Commands?.Count > 0
+                && !Plugin.CommandsRegistered)
                 Plugin.RegisterCommands();
         }
     }
 
-    /// <summary>
-    /// Detects world load completion via chunk visibility updates.
-    /// Triggers <see cref="Plugin.OnWorldLoad"/> once per world.
-    ///
-    /// Tracks the current world instance to correctly detect world transitions
-    /// (exit to menu → new world) within the same game session.
-    /// </summary>
     [HarmonyPatch(typeof(WorldGeneration), "UpdateChunkVisibility")]
     internal static class WorldLoadPatch
     {
-        /// <summary>
-        /// Cached reference to the world instance we already warmed for.
-        /// When WorldGeneration.world changes (new world), this mismatch
-        /// triggers a fresh OnWorldLoad call.
-        /// </summary>
         private static WorldGeneration _lastWarmedWorld;
 
         [HarmonyPostfix]
@@ -250,24 +268,18 @@ namespace ScavShrapnelMod
             try
             {
                 var world = WorldGeneration.world;
-                if (world == null || world.generatingWorld)
-                    return;
-
-                // WHY: Comparing instance reference, not bool flag.
-                // On second world load, world is a new instance → mismatch → re-warm.
-                // Prevents the bug where _warmedThisSession stayed true forever.
-                if (world == _lastWarmedWorld)
-                    return;
+                if (world == null || world.generatingWorld) return;
+                if (world == _lastWarmedWorld) return;
 
                 _lastWarmedWorld = world;
                 Plugin.OnWorldLoad();
-                Plugin.Log.LogInfo("[WorldLoad] Visuals pre-warmed on world load");
+                Plugin.Log.LogInfo(
+                    "[WorldLoad] Visuals pre-warmed on world load");
             }
-            catch { /* guard — runs every frame in postfix */ }
+            catch { }
         }
     }
 
-    /// <summary>Ensures visuals are warmed when player camera initializes.</summary>
     [HarmonyPatch(typeof(PlayerCamera), "Start")]
     internal static class PlayerCameraStartPatch
     {
@@ -277,7 +289,8 @@ namespace ScavShrapnelMod
             if (!Plugin.VisualsWarmed)
             {
                 Plugin.WarmVisuals();
-                Plugin.Log.LogInfo("[PlayerCamera] Visuals pre-warmed on camera start");
+                Plugin.Log.LogInfo(
+                    "[PlayerCamera] Visuals pre-warmed on camera start");
             }
         }
     }

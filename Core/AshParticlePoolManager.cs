@@ -11,7 +11,7 @@ namespace ScavShrapnelMod.Core
     ///   Unlit — Sprite-Unlit-Default: embers, fire, glow
     ///
     /// Initialization is lazy — EnsureReady() called before first use.
-    /// This eliminates race conditions with console commands vs world load.
+    /// Material heal triggered by SparkPoolUpdater every 60 frames.
     /// </summary>
     public static class AshParticlePoolManager
     {
@@ -26,7 +26,6 @@ namespace ScavShrapnelMod.Core
         /// <summary>
         /// Lazy initializer — guarantees pools are ready before use.
         /// Safe to call every frame — returns immediately if already initialized.
-        /// Solves race condition: console command before world load.
         /// </summary>
         public static bool EnsureReady()
         {
@@ -98,14 +97,29 @@ namespace ScavShrapnelMod.Core
         }
 
         /// <summary>
-        /// Periodic material heal — call from manager Update.
-        /// Repairs shader corruption from vanilla chunk unloading.
+        /// Periodic material heal — called from SparkPoolUpdater every 60 frames.
+        /// 
+        /// WHY: Vanilla chunk unloading can destroy shader references on materials
+        /// created via Shader.Find(). This re-fetches materials from ShrapnelVisuals
+        /// (which re-creates them if shader is null) and propagates to pools.
+        /// 
+        /// IMPORTANT: ShrapnelVisuals.LitMaterial/UnlitMaterial getters internally
+        /// check if shader is null and re-create the material. So calling them here
+        /// forces fresh material creation when corruption is detected.
         /// </summary>
         public static void HealMaterials()
         {
             if (!_initialized) return;
-            _litPool?.HealMaterial(ShrapnelVisuals.LitMaterial ?? ShrapnelVisuals.UnlitMaterial);
-            _unlitPool?.HealMaterial(ShrapnelVisuals.UnlitMaterial);
+
+            // WHY: Accessing the properties triggers ShrapnelVisuals to re-create
+            // materials if their shaders were corrupted. This is the fix —
+            // previously HealMaterials() was defined but never called from anywhere.
+            Material freshLit = ShrapnelVisuals.LitMaterial
+                             ?? ShrapnelVisuals.UnlitMaterial;
+            Material freshUnlit = ShrapnelVisuals.UnlitMaterial;
+
+            _litPool?.HealMaterial(freshLit);
+            _unlitPool?.HealMaterial(freshUnlit);
         }
     }
 }

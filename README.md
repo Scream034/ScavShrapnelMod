@@ -1,10 +1,9 @@
 # Shrapnel Overhaul Mod ![Version](https://img.shields.io/badge/version-0.9.2-blue)
 
-### [English](#-english) |[Русский](#-русский)
+[English](#english) | [Русский](#русский)
 
 ---
 
-<a name="english"></a>
 ## English
 
 ### About the Mod
@@ -66,7 +65,6 @@ Open the in-game console with `~`.
 
 ---
 
-<a name="русский"></a>
 ## Русский
 
 ### О моде
@@ -125,3 +123,5 @@ Open the in-game console with `~`.
 | `shrapnel_status` | Статус производительности мода | `shrapnel_status` |
 
 *(Для технической информации, сетевой диагностики и архитектуры смотрите `README_DEV.md`).*
+
+[English](#english) | [Русский](#русский)

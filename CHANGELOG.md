@@ -2,6 +2,134 @@
 
 All notable changes to the Shrapnel Overhaul Mod will be documented here.
 
+## [0.9.2] — 2026-03-22
+
+### Fixed
+- **Critical: Bullet power always calculated as 10** — `shotsPerFire=0` for single-shot
+  weapons zeroed the entire power formula (`135 × 1.5 × 0 = 0`, clamped to 10). This
+  prevented physics fragments from ever spawning on bullet impacts (`power 10 < min 20`),
+  made all spark showers nearly invisible (`sparkScale=0.4`), and caused `recv=0/0/0` on
+  clients since the server never created any shards to sync.
+  - Fix: `shotsPerFire` now clamped to minimum 1, `knockBack` clamped to minimum 0.
+  - Fix: `Convert.ToSingle()` replaces direct `(float)` cast for type-safe unboxing of
+    reflected fields (handles boxed `int`, `float`, `double`).
+  - Fix: Reflection flags now include `NonPublic` to catch fields with any access modifier.
+  - First 3 shots log full power breakdown in Release builds for remote diagnosis.
+
+- **Particles flying through solid blocks** — Muzzle blast dust and bullet impact dust
+  could spray directly into terrain when the blast/bullet direction opposed the surface
+  normal. `SafeBlastDirection()` now reflects the direction vector when it points into
+  the block, ensuring all particles spray into open air.
+
+- **Kinetic dust plume spraying into walls** — `SpawnKineticPlume` was emitting particles
+  along `bulletDir`, which by definition points INTO the block that was hit. Reversed to
+  `-bulletDir` — dust now sprays backward toward the shooter, which is physically correct
+  (debris exits the entry side of the impact).
+
+- **Unicode crash in game console** — Characters like `✓` caused font fallback warnings
+  flooding the log. All console output now uses ASCII only (`[+]`, `[-]`, `*`, `--`).
+
+- **Old config defaults persisting after code changes** — Muzzle blast radius stayed at 8
+  instead of new default 12, impact radius at 2 instead of 4, etc. Version bump to 0.9.2
+  triggers automatic config backup and reset with correct defaults.
+
+### Added
+- **Kinetic Energy Transfer system (bullet impacts)** — Bullets now transfer momentum
+  directionally through blocks. Dust sprays backward from impact, metal conducts energy
+  further (1.5× scan radius), soft materials absorb energy but create denser local clouds.
+  Three-phase system: surface dust, kinetic plume, and metal conduction sparks.
+
+- **Column-scan surface detection (muzzle blast)** — Replaced brute-force grid scan with
+  column-scan algorithm that finds actual air→solid transitions. Scans downward for ground,
+  upward for ceilings, laterally for walls. Finds 3× more surfaces with less iteration.
+
+- **Directional particle emission** — Muzzle blast and impact dust now blend face normal
+  with blast/bullet direction for realistic spray patterns. Configurable blend factor
+  (40% blast for muzzle, 65% bullet for impacts). Dust rises with thermal convection.
+
+- **Material conductivity model** — Metal blocks extend impact scan radius by 1.5×
+  (configurable). Rock/concrete get slight bonus (1.1×). Sand/organic absorb energy
+  (0.7× radius but 1.4× particle density). Creates material-appropriate dust behavior.
+
+- **Metal conduction sparks** — Bright needle sparks travel perpendicular to bullet
+  direction along metal surfaces, simulating energy conducted through the block structure.
+  Only spawns on metal impacts.
+
+- **Console: `shrapnel_shot`** — Full bullet effect pipeline test at cursor position.
+  Supports weapon presets (`pistol`, `rifle`, `shotgun`, `turret`), custom power values,
+  directional control (`L`/`R`/`U`/`D`), force metal sparks (`-metal`), and individual
+  effect isolation (`muzzle`, `impact`, `sparks`).
+
+- **Console: `shrapnel_guninfo`** — Dumps all GunScript fields for power calculation
+  diagnosis. Shows priority fields (damage, knockback, shotsPerFire) first, computed
+  power result, and optional full field dump with `all` argument.
+
+- **Console: `shrapnel_highlight`** — Temporarily makes all physics shards visible
+  through walls with bright orange glow and top sorting order. Configurable duration
+  (default 10s), toggle off with `0`. Self-reverts cleanly.
+
+- **Config: `BulletImpactKineticTransfer`** (default 1.0) — Controls how many bonus
+  particles spawn along bullet travel axis. 0 = disabled, 2 = very directional.
+
+- **Config: `BulletImpactMetalConductivity`** (default 1.5) — Scan radius multiplier
+  for metal block impacts.
+
+### Changed
+- **`MuzzleBlastRadius` default: 8 → 12** — Column-scan finds surfaces efficiently at
+  larger radius. Guns now disturb dust across a 12-block area, turrets across 18 blocks.
+- **`BulletImpactBlastRadius` default: 2 → 4** — Kinetic transfer needs larger scan area
+  to create visible directional plumes.
+- **`BulletImpactBlastMaxParticles` default: 60 → 120** — Supports kinetic plume +
+  conduction sparks + surface dust without hitting cap.
+- **`BulletImpactBlastCountMult` default: 1.5 → 2.0** — More particles per surface for
+  visible dust clouds.
+- **`BulletImpactBlastMinEnergy` default: 0.2 → 0.15** — Sharper falloff for more
+  localized impact feel.
+- **`MuzzleBlastMaxParticles` default: 150 → 200** — Covers larger scan radius.
+- **`MuzzleBlastMaxParticlesTurret` default: 300 → 350** — Turret coverage.
+- **Console commands consolidated** — Removed `shrapnel_testmat` (merged into
+  `shrapnel_status mat`). All commands use consistent argument parsing.
+
+## [0.9.1] — 2026-03-21
+
+### Added
+- **Muzzle Blast Dust** — Firing a gun creates a concussive gas blast that disturbs
+  nearby surfaces. Reuses the same chunk/dust/streak particles as explosions for visual
+  consistency. Configurable scan radius (guns 8 blocks, turrets 12 via ×1.5 multiplier),
+  power-scaled count via √(bulletPower/25) with diminishing returns. Full config section
+  `[Effects.MuzzleBlast]`.
+
+- **Bullet Impact Block Blast** — Bullets hitting blocks emit dust from nearby exposed
+  surfaces. Scans 1–3 block radius around hit point, finds solid blocks with exposed faces,
+  emits particles toward air. Linear energy falloff with distance. Config section
+  `[Effects.BulletImpactBlast]`.
+
+- **Gunpowder Smoke** — Dark gray Lit wisps at bullet impact point. Count scales as
+  2 × √(powerRatio): pistol≈2, rifle≈5, shotgun≈9. Slow upward drift with turbulence,
+  marks where the bullet hit. Uses Lit material — dark in shadows, realistic.
+
+- **Block Hit Debris (Shrapnel→Block)** — `ShrapnelProjectile.HitBlock()` now spawns
+  material-appropriate debris particles. Uses `BlockClassifier`: metal produces sparks,
+  soft materials produce more dust and chunks. Energy scales from fragment impact speed.
+
+- **Fragment Scatter Improvement** — 60% hemisphere (±90° from surface normal) + 40%
+  full random direction. Fragments can now fly back toward the shooter for realistic
+  ricochet physics. Max speed capped at 18 m/s, damage multiplied by 0.4 (chips, not
+  kills). Max 5 fragments per bullet impact.
+
+- **Barrel Smoke** — 1–3 dark propellant gas wisps rising from barrel after each shot.
+  Count scales with √(powerRatio). Uses Lit material for shadow interaction.
+
+- **Turret Spark Boost** — Turret shots get ×2.0 spark scale (`TurretSparkBoost = 2.0f`).
+  More dramatic spark shower matching turret caliber.
+
+- **Config: Bullet power scaling** — `BulletDamageSparkMultiplier`,
+  `BulletPowerFragmentMultiplier`, `MinBulletPowerForFragments`,
+  `TurretFragmentMultiplier`.
+
+- **Bullet power formula** — `power = structureDamage × (1 + knockBack/10) × shotsPerFire`.
+  Reads GunScript fields via reflection. Pistol≈45, Rifle≈189, Turret=80, Shotgun≈500.
+
 ## [0.8.5] — 2026-03-20
 - **Fixed double-explosions and block flickering on clients:** Turret deaths and
   bullet impacts were incorrectly triggering shrapnel and vanilla explosions on the
